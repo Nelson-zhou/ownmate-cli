@@ -1,0 +1,183 @@
+{
+  "contractVersion": 1,
+  "titleVisibility": {
+    "defaultEnabled": true,
+    "removed": { "title": "", "titleEnabled": false },
+    "restored": { "title": "", "titleEnabled": true }
+  },
+  "weatherSnapshot": {
+    "summary": "晴", "temperatureCelsius": 23.0, "feelsLikeCelsius": 24.0, "code": "100",
+    "details": {
+      "humidity": 65.0, "windDir": "东南风", "windScale": "2", "windScaleIsBeaufort": true,
+      "dailySummary": true, "observedAt": "2026-09-26", "minTemperatureCelsius": 18.0,
+      "maxTemperatureCelsius": 26.0, "windSpeedKmh": 8.0, "pressureHpa": 1008.0,
+      "visibilityKm": 15.0, "precipitationMm": 0.0, "cloudCoverPercent": 12.0,
+      "dewPointCelsius": 16.0, "sunrise": "06:15", "sunset": "18:20",
+      "moonrise": "17:10", "moonset": "04:50", "moonPhase": "满月"
+    }
+  },
+  "limits": {
+    "maxTitleUtf16": 1024,
+    "maxWebPreviewCount": 64,
+    "maxWebPreviewUrlBytes": 2048,
+    "maxWebPreviewTitleUtf16": 512,
+    "maxWebPreviewDescriptionUtf16": 2048,
+    "maxWebPreviewSiteNameUtf16": 120,
+    "maxWebPreviewCapturedAtBytes": 64
+  },
+  "ordering": {
+    "webPreviews": "exactUrlUtf16Ascending"
+  },
+  "accepted": {
+    "name": "independent title and native body round-trip as one journal",
+    "input": {
+      "journalSchemaVersion": 5,
+      "entryId": "entry-native-v1",
+      "containerId": "ownmate-personal-default-v1",
+      "journalDate": "2026-08-13",
+      "occurredAt": "2026-08-13T09:30:00+08:00",
+      "createdAt": "2026-08-13T01:30:00Z",
+      "updatedAt": "2026-08-13T01:31:00Z",
+      "timezone": "Asia/Shanghai",
+      "revision": 7,
+      "title": "独立标题",
+      "document": {
+        "documentSchemaVersion": 3,
+        "blocks": [
+          {
+            "type": "paragraph",
+            "id": "paragraph-1",
+            "content": [
+              {
+                "text": "正文第一段 🙂",
+                "marks": [{ "type": "bold" }]
+              }
+            ]
+          },
+          {
+            "type": "reminderReference",
+            "id": "reminder-reference-1",
+            "reminderId": "reminder-1"
+          },
+          {
+            "type": "paragraph",
+            "id": "web-preview-url-1",
+            "content": [
+              {
+                "text": "https://example.com/moment?ref=fixture"
+              }
+            ]
+          }
+        ]
+      },
+      "context": {
+        "location": null,
+        "weather": null,
+        "mood": null,
+        "tags": [],
+        "provenance": {}
+      },
+      "assets": [],
+      "source": { "type": "ownMate" },
+      "webPreviews": [
+        {
+          "url": "https://example.com/moment?ref=fixture",
+          "title": "抓取时标题",
+          "description": "抓取时摘要",
+          "siteName": "Example",
+          "capturedAt": "2026-08-31T02:03:04Z"
+        }
+      ]
+    },
+    "expected": {
+      "revision": 7,
+      "contentHash": "0989d612661a83cb7285bc47aaabc8e669ad2af14b65c83c5b9fe8d7edc5521a"
+    }
+  },
+  "rejections": [
+    {
+      "name": "schema 5 requires an independent title",
+      "expectedError": "journalShape",
+      "input": {
+        "journalSchemaVersion": 5,
+        "entryId": "missing-title",
+        "journalDate": "2026-08-13",
+        "occurredAt": "2026-08-13T09:30:00+08:00",
+        "createdAt": "2026-08-13T01:30:00Z",
+        "updatedAt": "2026-08-13T01:31:00Z",
+        "timezone": "Asia/Shanghai",
+        "revision": 1,
+        "document": {
+          "documentSchemaVersion": 3,
+          "blocks": [{ "type": "paragraph", "id": "paragraph-1", "content": [] }]
+        },
+        "context": {
+          "location": null,
+          "weather": null,
+          "mood": null,
+          "tags": [],
+          "provenance": {}
+        },
+        "assets": [],
+        "source": { "type": "ownMate" }
+      }
+    },
+    {
+      "name": "schema 5 cannot contain the legacy document shape",
+      "expectedError": "journalShape",
+      "input": {
+        "journalSchemaVersion": 5,
+        "entryId": "legacy-document",
+        "journalDate": "2026-08-13",
+        "occurredAt": "2026-08-13T09:30:00+08:00",
+        "createdAt": "2026-08-13T01:30:00Z",
+        "updatedAt": "2026-08-13T01:31:00Z",
+        "timezone": "Asia/Shanghai",
+        "revision": 1,
+        "title": "标题",
+        "document": {
+          "documentSchemaVersion": 2,
+          "type": "doc",
+          "nodeId": "root",
+          "content": []
+        },
+        "context": {
+          "location": null,
+          "weather": null,
+          "mood": null,
+          "tags": [],
+          "provenance": {}
+        },
+        "assets": [],
+        "source": { "type": "ownMate" }
+      }
+    },
+    {
+      "name": "legacy journal schemas cannot contain Document v3",
+      "expectedError": "journalShape",
+      "input": {
+        "journalSchemaVersion": 4,
+        "entryId": "native-document-under-legacy-schema",
+        "journalDate": "2026-08-13",
+        "occurredAt": "2026-08-13T09:30:00+08:00",
+        "createdAt": "2026-08-13T01:30:00Z",
+        "updatedAt": "2026-08-13T01:31:00Z",
+        "timezone": "Asia/Shanghai",
+        "revision": 1,
+        "document": {
+          "documentSchemaVersion": 3,
+          "blocks": [{ "type": "paragraph", "id": "paragraph-1", "content": [] }]
+        },
+        "context": {
+          "location": null,
+          "weather": null,
+          "mood": null,
+          "tags": [],
+          "provenance": {}
+        },
+        "assets": [],
+        "source": { "type": "ownMate" }
+      }
+    }
+  ]
+}

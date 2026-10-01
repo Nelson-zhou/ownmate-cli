@@ -1,0 +1,65 @@
+{
+  "name": "native-editor-v1-document-v3-unicode",
+  "input": {
+    "documentSchemaVersion": 3,
+    "blocks": [
+      {
+        "type": "paragraph",
+        "id": "paragraph-1",
+        "content": [
+          {
+            "text": "你好，OwnMate 🙂",
+            "marks": [
+              { "type": "bold" },
+              { "type": "foregroundColor", "rgb": "#336699" }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "orderedList",
+        "id": "list-1",
+        "start": 2,
+        "items": [
+          {
+            "id": "item-1",
+            "content": [{ "text": "跨端一致", "marks": [] }]
+          }
+        ]
+      },
+      {
+        "type": "drawing",
+        "id": "drawing-1",
+        "assetId": "asset-drawing"
+      },
+      {
+        "type": "contextReference",
+        "id": "mood-1",
+        "kind": "mood"
+      },
+      {
+        "type": "reminderReference",
+        "id": "reminder-1",
+        "reminderId": "reminder-1"
+      },
+      {
+        "type": "mediaGroup",
+        "id": "media-group-1",
+        "items": [
+          {
+            "type": "image",
+            "id": "media-group-image-1",
+            "assetId": "asset-group-image",
+            "alt": "晚霞"
+          },
+          {
+            "type": "video",
+            "id": "media-group-video-1",
+            "assetId": "asset-group-video",
+            "label": "散步片段"
+          }
+        ]
+      }
+    ]
+  }
+}

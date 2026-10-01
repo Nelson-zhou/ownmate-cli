@@ -1,0 +1,5 @@
+ownmate-core/target/
+*.env
+.env*
+*.pem
+*.key

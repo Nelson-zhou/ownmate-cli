@@ -1,0 +1,6 @@
+OwnMate CLI
+Copyright 2026 OwnMate contributors
+
+This distribution includes the OwnMate read-only connector and the domain validation
+code required to validate locally decrypted records. The Android application and
+server implementation are not included.

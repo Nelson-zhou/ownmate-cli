@@ -1,0 +1,14 @@
+[package]
+name = "journal-domain"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+document-model = { path = "../document-model" }
+document-validation = { path = "../document-validation" }
+asset-manifest = { path = "../asset-manifest" }
+canonical-json = { path = "../canonical-json" }
+thiserror.workspace = true

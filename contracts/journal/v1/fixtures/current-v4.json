@@ -1,0 +1,110 @@
+{
+  "name": "journal-v1-schema-revision-4-unicode",
+  "input": {
+    "journalSchemaVersion": 4,
+    "entryId": "journal-fixture",
+    "journalDate": "2026-08-09",
+    "occurredAt": "2026-08-09T18:30:00+08:00",
+    "createdAt": "2026-08-09T10:31:00Z",
+    "updatedAt": "2026-08-09T10:32:00Z",
+    "timezone": "Asia/Shanghai",
+    "revision": 7,
+    "document": {
+      "documentSchemaVersion": 2,
+      "type": "doc",
+      "nodeId": "root-fixture",
+      "content": [
+        {
+          "type": "paragraph",
+          "nodeId": "paragraph-fixture",
+          "textAlign": "left",
+          "content": [
+            {
+              "type": "text",
+              "text": "傍晚在西湖散步 🌇",
+              "marks": [
+                {
+                  "type": "bold"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "image",
+          "nodeId": "image-fixture",
+          "assetId": "asset-fixture",
+          "alt": "西湖晚霞"
+        }
+      ]
+    },
+    "context": {
+      "location": {
+        "latitude": 30.2423,
+        "longitude": 120.1502,
+        "name": "西湖",
+        "address": "杭州市西湖区",
+        "city": "杭州",
+        "district": "西湖区",
+        "province": "浙江",
+        "country": "中国"
+      },
+      "weather": {
+        "summary": "晴",
+        "temperatureCelsius": 29.5,
+        "code": "CLEAR",
+        "feelsLikeCelsius": 31.0
+      },
+      "mood": "平静",
+      "stateOfMind": {
+        "version": 1,
+        "entryType": "mood",
+        "score": 2,
+        "descriptors": ["平静", "满足"],
+        "factors": ["自然", "散步"],
+        "additionalContext": "风很轻。",
+        "loggedAt": "2026-08-09T18:32:00+08:00"
+      },
+      "tags": ["杭州", "散步"],
+      "provenance": {
+        "occurredAt": {
+          "source": "media_metadata",
+          "assetId": "asset-fixture",
+          "sourceAssetRemoved": false
+        },
+        "location": {
+          "source": "media_metadata",
+          "assetId": "asset-fixture",
+          "sourceAssetRemoved": false
+        },
+        "weather": {
+          "source": "weather_provider",
+          "assetId": null,
+          "sourceAssetRemoved": false
+        }
+      }
+    },
+    "assets": [
+      {
+        "assetId": "asset-fixture",
+        "assetType": "image",
+        "mimeType": "image/jpeg",
+        "byteSize": 1024,
+        "checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "createdAt": "2026-08-09T10:30:00Z",
+        "width": 1920,
+        "height": 1080,
+        "durationMs": null,
+        "originalFilename": "杭州-西湖.jpg",
+        "localState": "available",
+        "remoteState": "localOnly",
+        "cloudEncryptionMetadata": null
+      }
+    ],
+    "source": {
+      "type": "ownMate"
+    }
+  },
+  "expectedCanonicalJson": "{\"assets\":[{\"assetId\":\"asset-fixture\",\"assetType\":\"image\",\"byteSize\":1024,\"checksum\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"cloudEncryptionMetadata\":null,\"createdAt\":\"2026-08-09T10:30:00Z\",\"durationMs\":null,\"height\":1080,\"localState\":\"available\",\"mimeType\":\"image/jpeg\",\"originalFilename\":\"杭州-西湖.jpg\",\"remoteState\":\"localOnly\",\"width\":1920}],\"context\":{\"location\":{\"address\":\"杭州市西湖区\",\"city\":\"杭州\",\"country\":\"中国\",\"district\":\"西湖区\",\"latitude\":30.2423,\"longitude\":120.1502,\"name\":\"西湖\",\"province\":\"浙江\"},\"mood\":\"平静\",\"provenance\":{\"location\":{\"assetId\":\"asset-fixture\",\"source\":\"media_metadata\",\"sourceAssetRemoved\":false},\"occurredAt\":{\"assetId\":\"asset-fixture\",\"source\":\"media_metadata\",\"sourceAssetRemoved\":false},\"weather\":{\"assetId\":null,\"source\":\"weather_provider\",\"sourceAssetRemoved\":false}},\"stateOfMind\":{\"additionalContext\":\"风很轻。\",\"descriptors\":[\"平静\",\"满足\"],\"entryType\":\"mood\",\"factors\":[\"自然\",\"散步\"],\"loggedAt\":\"2026-08-09T18:32:00+08:00\",\"score\":2,\"version\":1},\"tags\":[\"杭州\",\"散步\"],\"weather\":{\"code\":\"CLEAR\",\"feelsLikeCelsius\":31.0,\"summary\":\"晴\",\"temperatureCelsius\":29.5}},\"createdAt\":\"2026-08-09T10:31:00Z\",\"document\":{\"content\":[{\"content\":[{\"marks\":[{\"type\":\"bold\"}],\"text\":\"傍晚在西湖散步 🌇\",\"type\":\"text\"}],\"nodeId\":\"paragraph-fixture\",\"textAlign\":\"left\",\"type\":\"paragraph\"},{\"alt\":\"西湖晚霞\",\"assetId\":\"asset-fixture\",\"nodeId\":\"image-fixture\",\"type\":\"image\"}],\"documentSchemaVersion\":2,\"nodeId\":\"root-fixture\",\"type\":\"doc\"},\"entryId\":\"journal-fixture\",\"journalDate\":\"2026-08-09\",\"journalSchemaVersion\":4,\"occurredAt\":\"2026-08-09T18:30:00+08:00\",\"revision\":7,\"source\":{\"type\":\"ownMate\"},\"timezone\":\"Asia/Shanghai\",\"updatedAt\":\"2026-08-09T10:32:00Z\"}",
+  "expectedSha256": "b4c9f62d089b7b4c4a70e49ece5c7aa741ce5dc0e2a08576783795b08c5215bb"
+}

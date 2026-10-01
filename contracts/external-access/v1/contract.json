@@ -1,0 +1,69 @@
+{
+  "protocolVersion": 1,
+  "pairing": {
+    "qrType": "ownmate-external",
+    "qrVersion": 1,
+    "pairingTtlSeconds": 300,
+    "temporaryGrantTtlSeconds": 1800,
+    "modes": ["temporary", "trusted"],
+    "scope": "journals:read",
+    "availableScopes": ["journals:read", "fragments:read", "reminders:read"],
+    "legacyMissingScopes": ["journals:read"],
+    "scopeSelection": "explicit nonempty unique subset; immutable after approval; malformed explicit scopes fail closed",
+    "publicKey": "P-256 X.509 SubjectPublicKeyInfo DER, standard Base64"
+  },
+  "keyEnvelope": {
+    "version": 2,
+    "type": "ownmate-external-key-envelope",
+    "purpose": "DEK",
+    "agreement": "ECDH-P256",
+    "kdf": "HKDF-SHA256",
+    "hkdfInfo": "OwnMate ExternalAccess v2",
+    "keyspaceBinding": ["keyspaceId", "keyspaceGeneration"],
+    "cipher": "AES-256-GCM",
+    "nonceBytes": 12,
+    "keyBytes": 32
+  },
+  "journalPayload": {
+    "minimumPayloadVersion": 3,
+    "requiredRecordState": "saved",
+    "requiredLifecycleState": "active"
+  },
+  "mcp": {
+    "transport": "stdio",
+    "capabilities": ["resources"],
+    "resourceUriTemplate": "ownmate://journal/{entryId}",
+    "resourceUriTemplates": {
+      "journal": "ownmate://journal/{entryId}",
+      "fragment": "ownmate://fragments/{entryId}",
+      "reminder": "ownmate://reminders/{entryId}",
+      "reminderCompletion": "ownmate://reminder-completions/{entryId}"
+    },
+    "forbiddenCapabilities": ["tools", "prompts", "subscriptions", "writes"]
+  },
+  "resourceScopes": {
+    "journal": "journals:read",
+    "fragment": "fragments:read",
+    "reminder": "reminders:read",
+    "reminderCompletion": "reminders:read"
+  },
+  "reminderPayloadVersion": 2,
+  "completionIdentity": "SHA-256 UTF-8 occurrenceId + LF + cycle: + decimal completionCycle; rc_ lowercase hex prefix",
+  "legacyCompletionFragmentLinking": "retain text; do not infer missing completionCycle",
+  "securityLimitations": {
+    "projectionIsCryptographicFieldIsolation": false,
+    "rawContextMayBeDecodedByAuthorizedClient": true,
+    "revocationRecallsPreviouslyCopiedData": false
+  },
+  "mcpJournalV1Fields": [
+    "version",
+    "entryId",
+    "occurredAt",
+    "timezone",
+    "title",
+    "text",
+    "tags",
+    "mood",
+    "stateOfMind"
+  ]
+}

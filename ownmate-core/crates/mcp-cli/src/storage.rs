@@ -18,15 +18,44 @@ pub struct ExternalSession {
     pub grant_expires_at: Option<u64>,
     pub dek_key_id: String,
     pub dek_base64: String,
+    #[serde(default = "legacy_scopes")]
+    pub scopes: Vec<String>,
 }
 
 impl ExternalSession {
+    pub fn require_scope(&self, scope: &str) -> Result<()> {
+        validate_scopes(&self.scopes)?;
+        if !self.scopes.iter().any(|allowed| allowed == scope) {
+            return Err(McpError::Invalid("手机未授权读取此类内容".into()));
+        }
+        Ok(())
+    }
     pub fn is_trusted(&self) -> bool {
         self.trust_mode == "trusted" && self.refresh_token.is_some()
     }
 }
 
+pub fn legacy_scopes() -> Vec<String> {
+    vec!["journals:read".into()]
+}
+
+pub fn validate_scopes(scopes: &[String]) -> Result<()> {
+    let allowed = ["journals:read", "fragments:read", "reminders:read"];
+    let unique: std::collections::HashSet<_> = scopes.iter().collect();
+    if scopes.is_empty()
+        || scopes.len() > allowed.len()
+        || unique.len() != scopes.len()
+        || scopes
+            .iter()
+            .any(|scope| !allowed.contains(&scope.as_str()))
+    {
+        return Err(McpError::Invalid("外部读取权限无效".into()));
+    }
+    Ok(())
+}
+
 pub fn save_trusted(session: &ExternalSession) -> Result<()> {
+    validate_scopes(&session.scopes)?;
     if !session.is_trusted() {
         return Err(McpError::Invalid("临时会话不得写入系统凭据库".into()));
     }
@@ -46,6 +75,7 @@ pub fn load_trusted() -> Result<ExternalSession> {
     if !session.is_trusted() || session.protocol_version != 1 {
         return Err(McpError::Invalid("系统凭据库中的外部客户端凭据无效".into()));
     }
+    validate_scopes(&session.scopes)?;
     Ok(session)
 }
 
@@ -70,3 +100,37 @@ fn entry() -> Result<UnsupportedEntry> {
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 struct UnsupportedEntry;
+
+#[cfg(test)]
+mod scope_tests {
+    use super::*;
+
+    #[test]
+    fn missing_legacy_scope_field_never_expands_permission() {
+        let value = serde_json::json!({
+            "protocolVersion": 1, "baseUrl": "https://example.invalid",
+            "grantId": "fixture", "trustMode": "temporary", "accessToken": "",
+            "accessExpiresAt": 0, "refreshToken": null, "grantExpiresAt": 0,
+            "dekKeyId": "fixture", "dekBase64": ""
+        });
+        let session: ExternalSession = serde_json::from_value(value.clone()).unwrap();
+        assert!(session.require_scope("journals:read").is_ok());
+        assert!(session.require_scope("fragments:read").is_err());
+        assert!(session.require_scope("reminders:read").is_err());
+        let mut malformed = value;
+        malformed["scopes"] = serde_json::Value::Null;
+        assert!(serde_json::from_value::<ExternalSession>(malformed).is_err());
+    }
+
+    #[test]
+    fn empty_duplicate_and_unknown_scopes_fail_closed() {
+        for scopes in [
+            vec![],
+            vec!["unknown:read".into()],
+            vec!["reminders:read".into(), "reminders:read".into()],
+        ] {
+            assert!(validate_scopes(&scopes).is_err());
+        }
+        assert!(validate_scopes(&["fragments:read".into(), "reminders:read".into()]).is_ok());
+    }
+}

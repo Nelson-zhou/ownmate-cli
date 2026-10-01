@@ -136,6 +136,17 @@ pub fn decrypt_mcp_journal(
     dek_key_id: &str,
     dek: &[u8],
 ) -> Result<McpJournalV1> {
+    let mut plaintext = decrypt_payload(item, dek_key_id, dek)?;
+    let result = parse_mcp_journal(item, &plaintext);
+    plaintext.zeroize();
+    result
+}
+
+pub fn decrypt_payload(
+    item: &OpaqueJournal,
+    dek_key_id: &str,
+    dek: &[u8],
+) -> Result<Zeroizing<Vec<u8>>> {
     if dek.len() != 32
         || item.key_id != dek_key_id
         || item.algorithm != "AES-256-GCM"
@@ -149,7 +160,7 @@ pub fn decrypt_mcp_journal(
     }
     let nonce = decode_standard(&item.nonce, Some(12), "Journal nonce")?;
     let aad = format!("ownmate.sync.v2\nentryId={}", item.entry_id);
-    let mut plaintext = Aes256Gcm::new_from_slice(dek)
+    let plaintext = Aes256Gcm::new_from_slice(dek)
         .map_err(|_| McpError::Crypto)?
         .decrypt(
             Nonce::from_slice(&nonce),
@@ -159,9 +170,7 @@ pub fn decrypt_mcp_journal(
             },
         )
         .map_err(|_| McpError::Crypto)?;
-    let result = parse_mcp_journal(item, &plaintext);
-    plaintext.zeroize();
-    result
+    Ok(Zeroizing::new(plaintext))
 }
 
 fn parse_mcp_journal(item: &OpaqueJournal, plaintext: &[u8]) -> Result<McpJournalV1> {

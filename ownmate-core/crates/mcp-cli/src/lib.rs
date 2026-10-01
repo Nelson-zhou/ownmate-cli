@@ -1,7 +1,9 @@
 pub mod api;
 pub mod crypto;
 pub mod mcp;
+pub mod projection;
 pub mod protocol;
+pub mod query;
 pub mod storage;
 
 use thiserror::Error;

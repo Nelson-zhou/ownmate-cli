@@ -1,5 +1,5 @@
-use crate::api::ExternalApiClient;
-use crate::crypto::decrypt_mcp_journal;
+use crate::api::{ExternalApiClient, ReadResource};
+use crate::projection::decrypt_projection;
 use crate::protocol::JsonRpcRequest;
 use crate::storage::ExternalSession;
 use crate::{McpError, Result};
@@ -88,20 +88,45 @@ fn dispatch(
         })),
         "ping" => Ok(json!({})),
         "resources/list" => {
-            let resources = api
-                .list_journals(session)?
-                .into_iter()
-                .filter_map(|item| {
-                    let journal = decrypt_mcp_journal(&item, &session.dek_key_id, dek).ok()?;
-                    Some(json!({
-                        "uri": resource_uri(&journal.entry_id),
-                        "name": if journal.title.trim().is_empty() { journal.occurred_at.clone() } else { journal.title.clone() },
-                        "description": format!("OwnMate 已保存文字日记 · {}", journal.occurred_at),
-                        "mimeType": "application/json"
-                    }))
-                })
-                .collect::<Vec<_>>();
-            Ok(json!({"resources": resources}))
+            crate::storage::validate_scopes(&session.scopes)?;
+            let mut resources = Vec::new();
+            let mut counts = serde_json::Map::new();
+            for kind in [
+                ReadResource::Journal,
+                ReadResource::Fragment,
+                ReadResource::Reminder,
+                ReadResource::ReminderCompletion,
+            ] {
+                if !session.scopes.iter().any(|scope| scope == kind.scope()) {
+                    continue;
+                }
+                let items = api.list_resources(session, kind)?;
+                counts.insert(kind.path().into(), json!(items.len()));
+                for item in items {
+                    let projection = decrypt_projection(kind, &item, &session.dek_key_id, dek)?;
+                    let record = if kind == ReadResource::Journal {
+                        &projection
+                    } else {
+                        &projection["record"]
+                    };
+                    let title = record["title"]
+                        .as_str()
+                        .filter(|s| !s.trim().is_empty())
+                        .unwrap_or(&item.entry_id);
+                    resources.push(json!({
+                        "uri": typed_resource_uri(kind, &item.entry_id),
+                        "name": title, "mimeType":"application/json",
+                        "description": format!("OwnMate {} · read-only", kind.path())
+                    }));
+                }
+            }
+            Ok(json!({"resources":resources,"_meta":{"ownmate":{
+                "scopes":session.scopes, "returnedCount":resources.len(), "allPagesRead":true,
+                "countsByResourceType":counts,
+                "coverage":"authorized cloud-visible resources, not a complete local archive",
+                "unavailable":["mediaFiles","untranscribedMediaContent"],
+                "analysisGuidance":"Cite URI and recorded timestamps. Separate observation from inference; missing text is not missing experience."
+            }}}))
         }
         "resources/read" => {
             let uri = request
@@ -109,11 +134,11 @@ fn dispatch(
                 .get("uri")
                 .and_then(Value::as_str)
                 .ok_or_else(|| DispatchError::InvalidParams("缺少 resource uri".into()))?;
-            let entry_id = parse_resource_uri(uri)
+            let (kind, entry_id) = parse_typed_uri(uri)
                 .ok_or_else(|| DispatchError::InvalidParams("OwnMate resource uri 无效".into()))?;
-            let item = api.get_journal(session, &entry_id)?;
-            let journal = decrypt_mcp_journal(&item, &session.dek_key_id, dek)?;
-            let text = serde_json::to_string(&journal).map_err(McpError::from)?;
+            let item = api.get_resource(session, kind, &entry_id)?;
+            let projection = decrypt_projection(kind, &item, &session.dek_key_id, dek)?;
+            let text = serde_json::to_string(&projection).map_err(McpError::from)?;
             Ok(json!({
                 "contents": [{"uri": uri, "mimeType": "application/json", "text": text}]
             }))
@@ -127,16 +152,36 @@ fn resource_uri(entry_id: &str) -> String {
     format!("ownmate://journal/{}", percent_encode(entry_id))
 }
 
+pub fn typed_resource_uri(kind: ReadResource, id: &str) -> String {
+    if kind == ReadResource::Journal {
+        return resource_uri(id);
+    }
+    format!("ownmate://{}/{}", kind.path(), percent_encode(id))
+}
+
+#[cfg(test)]
 fn parse_resource_uri(uri: &str) -> Option<String> {
-    let encoded = uri.strip_prefix("ownmate://journal/")?;
+    let (kind, id) = parse_typed_uri(uri)?;
+    (kind == ReadResource::Journal).then_some(id)
+}
+
+pub fn parse_typed_uri(uri: &str) -> Option<(ReadResource, String)> {
+    let (namespace, encoded) = uri.strip_prefix("ownmate://")?.split_once('/')?;
+    let kind = match namespace {
+        "journal" => ReadResource::Journal,
+        "fragments" => ReadResource::Fragment,
+        "reminders" => ReadResource::Reminder,
+        "reminder-completions" => ReadResource::ReminderCompletion,
+        _ => return None,
+    };
     if encoded.is_empty() || encoded.contains('/') {
         return None;
     }
     let decoded = percent_decode(encoded)?;
-    if decoded.len() > 160 || decoded.chars().any(char::is_control) {
+    if decoded.len() > 160 || decoded.contains('/') || decoded.chars().any(char::is_control) {
         return None;
     }
-    Some(decoded)
+    Some((kind, decoded))
 }
 
 fn percent_encode(value: &str) -> String {
@@ -194,6 +239,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn typed_resource_uris_preserve_namespace_and_reject_path_escape() {
+        for kind in [
+            ReadResource::Journal,
+            ReadResource::Fragment,
+            ReadResource::Reminder,
+            ReadResource::ReminderCompletion,
+        ] {
+            let uri = typed_resource_uri(kind, "fixture");
+            assert_eq!(parse_typed_uri(&uri), Some((kind, "fixture".into())));
+        }
+        assert!(parse_typed_uri("ownmate://unknown/fixture").is_none());
+        assert!(parse_typed_uri("ownmate://reminders/a%2Fb").is_none());
+    }
+
+    #[test]
     fn resource_uri_round_trips_without_path_injection() {
         let id = "journal id?#中文";
         assert_eq!(parse_resource_uri(&resource_uri(id)).as_deref(), Some(id));
@@ -219,12 +279,13 @@ mod tests {
             base_url: "http://127.0.0.1:3000".into(),
             grant_id: "external_grant_fixture".into(),
             trust_mode: "temporary".into(),
-            access_token: "oma_fixture".into(), // git-guard: ignore — synthetic test token, never accepted by a server
+            access_token: "oma_fixture".into(), // git-guard: ignore -- synthetic unit-test token, not a live credential
             access_expires_at: u64::MAX,
             refresh_token: None,
             grant_expires_at: Some(u64::MAX),
             dek_key_id: "ownmate_dek_v1".into(),
             dek_base64: STANDARD.encode([0_u8; 32]),
+            scopes: crate::storage::legacy_scopes(),
         };
         for method in [
             "tools/list",

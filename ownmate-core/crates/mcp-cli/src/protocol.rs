@@ -45,6 +45,8 @@ pub struct ExchangePairingResponse {
     pub client_name: Option<String>,
     pub trust_mode: Option<String>,
     pub scope: Option<String>,
+    #[serde(default = "crate::storage::legacy_scopes")]
+    pub scopes: Vec<String>,
     pub access_token: Option<String>,
     pub access_expires_at: Option<u64>,
     pub refresh_token: Option<String>,

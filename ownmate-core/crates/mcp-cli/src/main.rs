@@ -43,7 +43,12 @@ fn run() -> Result<()> {
             println!("ownmate-mcp {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
-        Some("list") => {
+        Some(command @ ("list" | "query")) => {
+            let query_args: Vec<_> = args.collect();
+            if command == "list" && !query_args.is_empty() {
+                return Err(McpError::Invalid("筛选请使用 query 命令".into()));
+            }
+            let query = ownmate_mcp::query::Query::parse(query_args)?;
             let mut session = load_trusted()?;
             let api = ExternalApiClient::new(&session.base_url)?;
             let key = Zeroizing::new(
@@ -51,15 +56,38 @@ fn run() -> Result<()> {
                     .decode(&session.dek_base64)
                     .map_err(|_| McpError::Invalid("本机连接密钥无效".into()))?,
             );
-            let records = api
-                .list_journals(&mut session)?
-                .into_iter()
-                .map(|item| {
-                    ownmate_mcp::crypto::decrypt_mcp_journal(&item, &session.dek_key_id, &key)
-                })
-                .collect::<Result<Vec<_>>>()?;
-            println!("{}", serde_json::to_string_pretty(&records)?);
-            Ok(())
+            {
+                let mut records = Vec::new();
+                for kind in [
+                    ownmate_mcp::api::ReadResource::Journal,
+                    ownmate_mcp::api::ReadResource::Fragment,
+                    ownmate_mcp::api::ReadResource::Reminder,
+                    ownmate_mcp::api::ReadResource::ReminderCompletion,
+                ] {
+                    if !session.scopes.iter().any(|scope| scope == kind.scope()) {
+                        continue;
+                    }
+                    for item in api.list_resources(&mut session, kind)? {
+                        let mut projection = ownmate_mcp::projection::decrypt_projection(
+                            kind,
+                            &item,
+                            &session.dek_key_id,
+                            &key,
+                        )?;
+                        projection["resourceUri"] = serde_json::json!(
+                            ownmate_mcp::mcp::typed_resource_uri(kind, &item.entry_id)
+                        );
+                        records.push(projection);
+                    }
+                }
+                let output = if command == "query" {
+                    query.report_typed(records, &session.scopes)
+                } else {
+                    serde_json::to_value(records)?
+                };
+                println!("{}", serde_json::to_string_pretty(&output)?);
+                Ok(())
+            }
         }
         Some("read") => {
             let id = args
@@ -75,9 +103,19 @@ fn run() -> Result<()> {
                     .decode(&session.dek_base64)
                     .map_err(|_| McpError::Invalid("本机连接密钥无效".into()))?,
             );
-            let item = api.get_journal(&mut session, &id)?;
-            let record =
-                ownmate_mcp::crypto::decrypt_mcp_journal(&item, &session.dek_key_id, &key)?;
+            let (kind, id) = if id.starts_with("ownmate://") {
+                ownmate_mcp::mcp::parse_typed_uri(&id)
+                    .ok_or_else(|| McpError::Invalid("资源 URI 无效".into()))?
+            } else {
+                (ownmate_mcp::api::ReadResource::Journal, id)
+            };
+            let item = api.get_resource(&mut session, kind, &id)?;
+            let record = ownmate_mcp::projection::decrypt_projection(
+                kind,
+                &item,
+                &session.dek_key_id,
+                &key,
+            )?;
             println!("{}", serde_json::to_string_pretty(&record)?);
             Ok(())
         }
@@ -154,7 +192,18 @@ fn pair_and_serve(options: PairOptions) -> Result<()> {
             std::thread::sleep(Duration::from_secs(2));
             continue;
         }
-        if exchange.protocol_version != 1 || exchange.scope.as_deref() != Some("journals:read") {
+        ownmate_mcp::storage::validate_scopes(&exchange.scopes)?;
+        let declared: Vec<String> = exchange
+            .scope
+            .as_deref()
+            .unwrap_or("")
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect();
+        ownmate_mcp::storage::validate_scopes(&declared)?;
+        let declared_set: std::collections::HashSet<_> = declared.iter().collect();
+        let approved_set: std::collections::HashSet<_> = exchange.scopes.iter().collect();
+        if exchange.protocol_version != 1 || declared_set != approved_set {
             return Err(McpError::Invalid("外部访问授权的协议或权限不兼容".into()));
         }
         let grant_id = exchange
@@ -186,6 +235,7 @@ fn pair_and_serve(options: PairOptions) -> Result<()> {
             grant_expires_at: exchange.grant_expires_at,
             dek_key_id,
             dek_base64: STANDARD.encode(&dek),
+            scopes: exchange.scopes,
         };
         if trust_mode == "trusted" {
             if session.refresh_token.is_none() {
@@ -239,6 +289,9 @@ fn print_help() {
     eprintln!("  ownmate-mcp mcp");
     eprintln!("  ownmate-mcp disconnect");
     eprintln!("  ownmate-mcp list                 输出授权记录的 JSON");
+    eprintln!(
+        "  ownmate-mcp query [--contains TEXT] [--tag TAG] [--from YYYY-MM-DD] [--through YYYY-MM-DD]"
+    );
     eprintln!("  ownmate-mcp read ENTRY_ID        输出指定记录的 JSON");
     eprintln!("  ownmate-mcp --version");
     eprintln!("pair 会显示二维码；手机决定临时 30 分钟或信任设备，然后当前进程进入 MCP stdio。");

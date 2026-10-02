@@ -2,6 +2,14 @@
 
 电脑上的只读连接器：手机扫码授权，电脑本地解密，再交给你选择的脚本或 MCP Host。OwnMate 不内置或托管 AI。
 
+## 下载 OwnMate App
+
+[OwnMate 官网](https://www.ownmate.space/) — 了解 OwnMate 并获取 App 下载入口。
+
+[Android 安装包](https://github.com/Nelson-zhou/ownmate-cli/releases/tag/ownmate-app-preview-20261002) — 官方签名的非 debug 预发布 APK，尚未在应用商店上架。此仓库仅公开 CLI/MCP 源码和 App 安装包，不包含 App 主项目源码。
+
+已有用户安装前请核对安装包来源并保留恢复凭证。若系统提示签名不一致，不要卸载或清除原 App 数据；debug 测试版与发布版签名不同，不能直接覆盖安装。
+
 这是源码预览版，构建产物尚未签名。正式记录的生产临时配对曾通过抽样验证；新增瞬间、提醒与完成历史需要新版 App 和服务端，尚未完成生产端到端验收。
 
 ## 安装与授权

@@ -10,7 +10,7 @@
 
 Linux/macOS 用 `sha256sum -c 文件名.sha256` 或 `shasum -a 256 -c 文件名.sha256` 校验；Windows 用 `Get-FileHash 文件名.zip -Algorithm SHA256` 与校验文件对拍。校验值只能确认文件完整性，不能替代签名：本版 CLI 未签名、未公证，仍是预览发布。Linux 可信授权需要可用的 Secret Service / keyring。
 
-也可从公开源码构建。需要 Rust stable（edition 2024），Linux 构建另需 pkg-config 和 libdbus-1-dev：
+也可从公开源码构建。需要 Rust 1.89 或更新的 stable（edition 2024），Linux 构建另需 pkg-config 和 libdbus-1-dev：
 
 ```sh
 git clone https://github.com/Nelson-zhou/ownmate-cli.git
@@ -42,7 +42,13 @@ ownmate-mcp pair --name "My computer"
 
 可信模式需要程序所在用户能访问系统凭据库。macOS 推荐在 Mac 本机桌面登录用户的终端或 MCP Host 运行，并按系统提示确认 Keychain 访问；SSH 或后台上下文若需要系统交互，可能无法完成可信凭据保存，不能保证 SSH 始终可用。
 
-如果手机批准后 `pair` 报 `Platform secure storage failure: User interaction is not allowed`，手机批准已完成，但电脑没有完成可信凭据保存，CLI 会退出而未进入 MCP 会话。此错误表示当前运行上下文不允许 Keychain 所需交互，不能仅凭它判断是 Keychain 锁定还是条目访问规则需要确认。见 [Apple 的 errSecInteractionNotAllowed 定义](https://developer.apple.com/documentation/security/errsecinteractionnotallowed)。请在 Mac 本机桌面用户的终端/MCP Host 中使用可信模式，并按系统提示处理；不要把保存失败当成已有可用连接，也不要假定旧凭据已被替换。
+从 v0.2.1 起，`pair` 先用独立随机账号测试系统凭据库的保存、读回与清理，不读取你的旧连接。库不可用时，二维码只提供「仅本次使用」；不能选择「信任此设备」。你也可以运行 `ownmate-mcp doctor --credential-probe` 单独检查，结果不包含任何实际凭据。探测成功不保证随后保存一定成功。
+
+可信模式只有在保存、完整读回校验、服务器确认都成功后才显示连接完成。正式保存失败会在原完成期限内有限重试，旧连接不被覆盖，不会自动改成临时授权。手机批准后的完成期限是十分钟；未完成的连接不能读取内容或写提醒，到期须重新配对。旧授权仍保留原权限，但没有新完成协议证据的授权不会被标成「已确认连接」。
+
+若系统拒绝保存，需要回到本机桌面用户的终端/MCP Host，按正常系统提示处理。不能仅凭错误判断是凭据库锁定还是访问规则需要确认，也不承诺任何 SSH 会话都能可信连接。程序不会解锁系统凭据库、扩大条目权限或申请 allow-all。见 [Apple 的 errSecInteractionNotAllowed 定义](https://developer.apple.com/documentation/security/errsecinteractionnotallowed)。
+
+确认回复丢失或进程中断时，再次运行 `ownmate-mcp mcp` 或可信终端命令会优先继续待完成连接，收到同一授权的确认后才启用。磁盘只存 API 地址、授权 ID、协议版本和完成期限的私有选择器，不存 token、DEK 或配对私钥。原生凭据保存之后、选择器写入之前被强杀可能留下不可启用的孤立条目；不要把它当作已有连接。服务端授权仍可在 App 撤销。
 
 需要临时使用时，由你在手机配对页明确选择「仅本次使用（30 分钟）」，并保持同一 `pair` 进程及 stdin 打开，通过该进程的 MCP Resources/Tools 操作。stdin 结束、进程退出或到期后该会话结束。另起 `mcp` 或 `reminders create/update` 等命令会读取可信授权，不能复用临时会话。临时凭据与重试密文仅在内存；程序不会自动将失败的可信授权改为临时模式，不自动解锁、放宽凭据库访问规则或把凭据保存成普通文件。
 

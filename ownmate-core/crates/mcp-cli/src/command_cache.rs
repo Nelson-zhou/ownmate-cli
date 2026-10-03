@@ -157,7 +157,7 @@ impl CommandCache {
 }
 
 #[cfg(unix)]
-fn private_directory(directory: &Path) -> Result<()> {
+pub(crate) fn private_directory(directory: &Path) -> Result<()> {
     use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
     if let Some(parent) = directory.parent() {
         fs::create_dir_all(parent)?;
@@ -182,7 +182,7 @@ fn private_directory(directory: &Path) -> Result<()> {
 }
 
 #[cfg(target_os = "windows")]
-fn private_directory(directory: &Path) -> Result<()> {
+pub(crate) fn private_directory(directory: &Path) -> Result<()> {
     if let Some(parent) = directory.parent() {
         fs::create_dir_all(parent)?;
         protect_windows_directory(parent)?;
@@ -192,13 +192,13 @@ fn private_directory(directory: &Path) -> Result<()> {
 }
 
 #[cfg(all(not(unix), not(target_os = "windows")))]
-fn private_directory(_: &Path) -> Result<()> {
+pub(crate) fn private_directory(_: &Path) -> Result<()> {
     Err(McpError::Invalid(
         "此平台尚无已验证的私有密文缓存权限；请使用临时授权或受支持平台".into(),
     ))
 }
 
-fn private_file(path: &Path, metadata: &fs::Metadata) -> Result<()> {
+pub(crate) fn private_file(path: &Path, metadata: &fs::Metadata) -> Result<()> {
     if !metadata.is_file() || metadata.file_type().is_symlink() {
         return Err(invalid());
     }

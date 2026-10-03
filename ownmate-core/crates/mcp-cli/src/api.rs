@@ -1,9 +1,10 @@
 use crate::protocol::{
-    ApiEnvelope, CreatePairingRequest, CreatePairingResponse, ExchangePairingRequest,
-    ExchangePairingResponse, JournalItemResponse, JournalPage, OpaqueJournal, RefreshRequest,
-    RefreshResponse, ReminderCommandEnvelope, ReminderCommandReceipt,
+    ApiEnvelope, ClientReadyRequest, ClientReadyResponse, CreatePairingRequest,
+    CreatePairingResponse, ExchangePairingRequest, ExchangePairingResponse, JournalItemResponse,
+    JournalPage, OpaqueJournal, RefreshRequest, RefreshResponse, ReminderCommandEnvelope,
+    ReminderCommandReceipt,
 };
-use crate::storage::{ExternalSession, save_trusted};
+use crate::storage::ExternalSession;
 use crate::{McpError, Result};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -105,6 +106,7 @@ impl ExternalApiClient {
         &self,
         client_name: &str,
         public_key: &str,
+        supported_trust_modes: &[String],
     ) -> Result<CreatePairingResponse> {
         self.post_public(
             "/external-access/v1/pairings",
@@ -112,8 +114,41 @@ impl ExternalApiClient {
                 client_name,
                 platform: std::env::consts::OS,
                 client_public_key: public_key,
+                client_ready_version: 1,
+                supported_trust_modes,
             },
         )
+        .map_err(connection_error)
+    }
+
+    pub fn client_ready(&self, session: &mut ExternalSession, deadline: u64) -> Result<()> {
+        let request = ClientReadyRequest {
+            protocol_version: 1,
+            client_ready_version: 1,
+        };
+        let first = self
+            .authorized_post(
+                "/external-access/v1/client/ready",
+                &session.access_token,
+                &request,
+            )
+            .map_err(connection_error)?;
+        let result = if first.0 == 401 && session.is_trusted() {
+            // A prior ready may have succeeded with its reply lost. Only an ACTIVE
+            // grant can refresh server-side; awaiting/expired grants remain closed.
+            // This also handles another process rotating the short access-token hash.
+            self.refresh(session).map_err(connection_error)?;
+            self.authorized_post(
+                "/external-access/v1/client/ready",
+                &session.access_token,
+                &request,
+            )
+            .map_err(connection_error)?
+        } else {
+            first
+        };
+        let response: ClientReadyResponse = decode_response(result).map_err(connection_error)?;
+        validate_client_ready(&response, session, deadline)
     }
 
     pub fn exchange_pairing(
@@ -128,6 +163,7 @@ impl ExternalApiClient {
                 pairing_secret,
             },
         )
+        .map_err(connection_error)
     }
 
     pub fn list_journals(&self, session: &mut ExternalSession) -> Result<Vec<OpaqueJournal>> {
@@ -226,6 +262,12 @@ impl ExternalApiClient {
     }
 
     fn ensure_access(&self, session: &mut ExternalSession) -> Result<()> {
+        if session
+            .grant_expires_at
+            .is_some_and(|expiry| expiry <= now_millis())
+        {
+            return Err(McpError::Api("临时授权已到期，请重新扫码".into()));
+        }
         if session.access_expires_at > now_millis().saturating_add(30_000) {
             return Ok(());
         }
@@ -261,9 +303,8 @@ impl ExternalApiClient {
         }
         session.access_token = refreshed.access_token;
         session.access_expires_at = refreshed.access_expires_at;
-        if session.is_trusted() {
-            save_trusted(session)?;
-        }
+        // Refresh token is stable. Ephemeral access tokens stay in each process, avoiding
+        // Keychain prompts and concurrent CLI/MCP writers overwriting a verified grant.
         Ok(())
     }
 
@@ -326,6 +367,40 @@ impl ExternalApiClient {
             .read_to_string()
             .map_err(|error| McpError::Network(error.to_string()))?;
         Ok((status, body, retry_after))
+    }
+}
+
+pub(crate) fn validate_client_ready(
+    response: &ClientReadyResponse,
+    session: &ExternalSession,
+    deadline: u64,
+) -> Result<()> {
+    if response.protocol_version != 1
+        || response.client_ready_version != 1
+        || response.grant_id != session.grant_id
+        || response.status != "active"
+        || response.client_ready_expires_at != deadline
+        || response.client_ready_at == 0
+        || response.client_ready_at >= deadline
+    {
+        return Err(McpError::Invalid(
+            "客户端 ready 确认响应无效；新连接尚未生效".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn connection_error(error: McpError) -> McpError {
+    match error {
+        McpError::Json(_) => McpError::Invalid("连接协议响应格式无效".into()),
+        McpError::Network(_) => McpError::Network("连接请求未完成；未输出请求或凭据内容".into()),
+        McpError::ApiResponse { status, code, .. } => McpError::ApiResponse {
+            status,
+            code,
+            message: "客户端连接请求未获批准".into(),
+        },
+        McpError::Api(_) => McpError::Api("客户端连接请求未获批准".into()),
+        other => other,
     }
 }
 
@@ -421,6 +496,231 @@ fn percent_encode(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fake_ready_server(
+        refresh_allowed: bool,
+    ) -> (ExternalApiClient, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let task = std::thread::spawn(move || {
+            for index in 0..if refresh_allowed { 3 } else { 2 } {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut bytes = Vec::new();
+                let offset = loop {
+                    let mut chunk = [0; 1024];
+                    let count = stream.read(&mut chunk).unwrap();
+                    assert!(count > 0);
+                    bytes.extend_from_slice(&chunk[..count]);
+                    if let Some(offset) = bytes.windows(4).position(|v| v == b"\r\n\r\n") {
+                        let header = String::from_utf8_lossy(&bytes[..offset]);
+                        let size = header
+                            .lines()
+                            .find_map(|line| {
+                                line.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .and_then(|v| v.trim().parse::<usize>().ok())
+                            })
+                            .unwrap();
+                        if bytes.len() >= offset + 4 + size {
+                            break offset;
+                        }
+                    }
+                };
+                let header = String::from_utf8_lossy(&bytes[..offset]);
+                let request: serde_json::Value =
+                    serde_json::from_slice(&bytes[offset + 4..]).unwrap();
+                let (status, response) = if index == 1 {
+                    assert!(header.starts_with("POST /external-access/v1/token/refresh "));
+                    assert_eq!(
+                        request,
+                        serde_json::json!({"refreshToken":"SYNTHETIC_REFRESH_NOT_LIVE"})
+                    );
+                    if refresh_allowed {
+                        (
+                            200,
+                            serde_json::json!({"ok":true,"data":{"protocolVersion":1,
+                        "accessToken":"SYNTHETIC_REFRESHED_ACCESS","accessExpiresAt":u64::MAX,"scopes":["journals:read"]}}),
+                        )
+                    } else {
+                        (
+                            401,
+                            serde_json::json!({"ok":false,"message":"PRIVATE_AWAITING_DETAILS","data":{"code":"EXTERNAL_CLIENT_NOT_READY"}}),
+                        )
+                    }
+                } else {
+                    assert!(header.starts_with("POST /external-access/v1/client/ready "));
+                    assert_eq!(
+                        request,
+                        serde_json::json!({"protocolVersion":1,"clientReadyVersion":1})
+                    );
+                    if index == 0 {
+                        (
+                            401,
+                            serde_json::json!({"ok":false,"message":"PRIVATE_TOKEN_DETAILS","data":{"code":"EXTERNAL_ACCESS_EXPIRED"}}),
+                        )
+                    } else {
+                        assert!(header.contains("Bearer SYNTHETIC_REFRESHED_ACCESS"));
+                        (
+                            200,
+                            serde_json::json!({"ok":true,"data":{"protocolVersion":1,"clientReadyVersion":1,
+                            "grantId":"fixture_grant","status":"active","clientReadyExpiresAt":100,"clientReadyAt":50}}),
+                        )
+                    }
+                };
+                let body = response.to_string();
+                write!(stream, "HTTP/1.1 {status} Synthetic\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            }
+        });
+        (ExternalApiClient::new(&base).unwrap(), task)
+    }
+
+    #[test]
+    fn ready_lost_reply_recovers_expired_or_rotated_access_with_active_only_memory_refresh() {
+        let (api, task) = fake_ready_server(true);
+        let mut session = crate::storage::fixtures::trusted();
+        session.scopes = vec!["journals:read".into()];
+        session.write_context = None;
+        api.client_ready(&mut session, 100).unwrap();
+        assert_eq!(session.access_token, "SYNTHETIC_REFRESHED_ACCESS");
+        assert_eq!(
+            session.refresh_token.as_deref(),
+            Some("SYNTHETIC_REFRESH_NOT_LIVE")
+        );
+        task.join().unwrap();
+    }
+
+    #[test]
+    fn ready_401_cannot_refresh_or_activate_an_awaiting_grant() {
+        let (api, task) = fake_ready_server(false);
+        let mut session = crate::storage::fixtures::trusted();
+        let original = serde_json::to_string(&session).unwrap();
+        let error = api.client_ready(&mut session, 100).unwrap_err();
+        assert!(!error.to_string().contains("PRIVATE_"));
+        assert_eq!(serde_json::to_string(&session).unwrap(), original);
+        task.join().unwrap();
+    }
+
+    #[test]
+    fn ready_validates_identity_and_original_deadline_even_for_idempotent_late_reply() {
+        assert_eq!(
+            serde_json::to_value(ClientReadyRequest {
+                protocol_version: 1,
+                client_ready_version: 1
+            })
+            .unwrap(),
+            serde_json::json!({"protocolVersion":1,"clientReadyVersion":1})
+        );
+        let session = crate::storage::fixtures::trusted();
+        let mut response = ClientReadyResponse {
+            protocol_version: 1,
+            client_ready_version: 1,
+            grant_id: session.grant_id.clone(),
+            status: "active".into(),
+            client_ready_expires_at: 100,
+            client_ready_at: 50,
+        };
+        assert!(validate_client_ready(&response, &session, 100).is_ok());
+        response.client_ready_expires_at = 200;
+        assert!(validate_client_ready(&response, &session, 100).is_err());
+        response.client_ready_expires_at = 100;
+        response.client_ready_at = 101;
+        assert!(validate_client_ready(&response, &session, 100).is_err());
+        response.client_ready_at = 50;
+        response.grant_id = "other_synthetic_grant".into();
+        assert!(validate_client_ready(&response, &session, 100).is_err());
+    }
+
+    #[test]
+    fn connection_errors_do_not_echo_response_private_values() {
+        let error = connection_error(McpError::ApiResponse {
+            status: 400,
+            code: "BAD_READY".into(),
+            message: "PRIVATE_TOKEN_VALUE".into(),
+        });
+        assert!(!error.to_string().contains("PRIVATE_"));
+        let malformed =
+            serde_json::from_str::<ClientReadyResponse>(r#"{"protocolVersion":"PRIVATE_VALUE"}"#)
+                .unwrap_err();
+        assert!(
+            !connection_error(McpError::Json(malformed))
+                .to_string()
+                .contains("PRIVATE_")
+        );
+    }
+
+    #[test]
+    fn refresh_uses_stable_refresh_token_without_writing_keychain_or_expanding_scope() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let scopes = vec!["journals:read".to_string()];
+        let task = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut bytes = Vec::new();
+            loop {
+                let mut chunk = [0; 1024];
+                let count = stream.read(&mut chunk).unwrap();
+                bytes.extend_from_slice(&chunk[..count]);
+                if let Some(offset) = bytes.windows(4).position(|v| v == b"\r\n\r\n") {
+                    let header = String::from_utf8_lossy(&bytes[..offset]);
+                    let size = header
+                        .lines()
+                        .find_map(|line| {
+                            line.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .and_then(|v| v.trim().parse::<usize>().ok())
+                        })
+                        .unwrap();
+                    if bytes.len() >= offset + 4 + size {
+                        break;
+                    }
+                }
+            }
+            let offset = bytes.windows(4).position(|v| v == b"\r\n\r\n").unwrap();
+            assert!(
+                String::from_utf8_lossy(&bytes[..offset])
+                    .starts_with("POST /external-access/v1/token/refresh ")
+            );
+            let request: serde_json::Value = serde_json::from_slice(&bytes[offset + 4..]).unwrap();
+            assert_eq!(
+                request,
+                serde_json::json!({"refreshToken":"SYNTHETIC_REFRESH_NOT_LIVE"})
+            );
+            let body = serde_json::json!({"ok":true,"data":{"protocolVersion":1,"accessToken":"SYNTHETIC_NEW_ACCESS","accessExpiresAt":u64::MAX,"scopes":scopes}}).to_string();
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .unwrap();
+        });
+        let mut session = crate::storage::fixtures::trusted();
+        session.scopes = vec!["journals:read".into()];
+        session.write_context = None;
+        session.base_url = base.clone();
+        session.access_expires_at = 0;
+        ExternalApiClient::new(&base)
+            .unwrap()
+            .refresh(&mut session)
+            .unwrap();
+        assert_eq!(
+            session.refresh_token.as_deref(),
+            Some("SYNTHETIC_REFRESH_NOT_LIVE")
+        );
+        assert_eq!(session.access_token, "SYNTHETIC_NEW_ACCESS");
+        task.join().unwrap();
+        // This test requires no native entry, even when running without a desktop keyring.
+    }
 
     #[test]
     fn pagination_rejects_duplicate_and_invalid_resource_identity() {

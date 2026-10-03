@@ -20,6 +20,27 @@
     "defaultChecked": [],
     "existingGrantsAutoExpanded": false
   },
+  "clientReadiness": {
+    "clientReadyVersion": 1,
+    "negotiatedAtCreation": true,
+    "supportedTrustModes": "nonempty unique subset of temporary/trusted; immutable and server-enforced",
+    "nativeStoreUnavailableModes": ["temporary"],
+    "awaitingStatus": "awaiting_client",
+    "completionTtlSeconds": 600,
+    "completionDeadline": "original approved exchange deadline; never extended by retry",
+    "ready": "POST /external-access/v1/client/ready",
+    "readyAuthentication": "own external access token; lookup by hash, no caller-supplied grant identity",
+    "readyBody": {"protocolVersion": 1, "clientReadyVersion": 1},
+    "beforeReadyDenied": ["resources", "refresh", "reminderCommands", "reminderPermits"],
+    "trustedReadyOrder": ["nativeStoreSave", "readBackVerify", "readyAck", "selectActiveConnection"],
+    "temporaryReadyOrder": ["validateEnvelopeAndSession", "readyAck"],
+    "temporaryCredentialsPersisted": false,
+    "pendingExpiryRequiresTtlDeletion": false,
+    "revokedOrExpiredCanActivate": false,
+    "ackProvesPhysicalStorage": false,
+    "legacyGrants": "unchanged scopes and behavior; missing readiness never means persisted",
+    "newClientMissingServerCapability": "fail before displaying QR; no silent legacy activation"
+  },
   "keyEnvelope": {
     "version": 2,
     "type": "ownmate-external-key-envelope",

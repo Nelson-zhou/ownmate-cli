@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApiEnvelope<T> {
     pub ok: bool,
@@ -9,15 +9,17 @@ pub struct ApiEnvelope<T> {
     pub message: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreatePairingRequest<'a> {
     pub client_name: &'a str,
     pub platform: &'a str,
     pub client_public_key: &'a str,
+    pub client_ready_version: u32,
+    pub supported_trust_modes: &'a [String],
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreatePairingResponse {
     pub protocol_version: u32,
@@ -27,25 +29,37 @@ pub struct CreatePairingResponse {
     pub client_fingerprint: String,
     pub expires_at: u64,
     pub qr_payload: String,
+    #[serde(default)]
+    pub client_ready_version: Option<u32>,
+    #[serde(default)]
+    pub supported_trust_modes: Option<Vec<String>>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExchangePairingRequest<'a> {
     pub pairing_id: &'a str,
     pub pairing_secret: &'a str,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExchangePairingResponse {
     pub protocol_version: u32,
     pub status: String,
+    #[serde(default)]
+    pub client_ready_version: Option<u32>,
+    #[serde(default)]
+    pub client_ready_expires_at: Option<u64>,
+    #[serde(default)]
+    pub client_ready_at: Option<u64>,
+    #[serde(default)]
+    pub supported_trust_modes: Option<Vec<String>>,
     pub grant_id: Option<String>,
     pub client_name: Option<String>,
     pub trust_mode: Option<String>,
     pub scope: Option<String>,
-    #[serde(default = "crate::storage::legacy_scopes")]
+    #[serde(default)]
     pub scopes: Vec<String>,
     pub access_token: Option<String>,
     pub access_expires_at: Option<u64>,
@@ -54,6 +68,24 @@ pub struct ExchangePairingResponse {
     pub key_envelope: Option<ExternalKeyEnvelope>,
     #[serde(default)]
     pub write_context: Option<ReminderWriteContext>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientReadyRequest {
+    pub protocol_version: u32,
+    pub client_ready_version: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientReadyResponse {
+    pub protocol_version: u32,
+    pub client_ready_version: u32,
+    pub grant_id: String,
+    pub status: String,
+    pub client_ready_expires_at: u64,
+    pub client_ready_at: u64,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -90,13 +122,13 @@ pub struct WrappedDekField {
     pub nonce: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RefreshRequest<'a> {
     pub refresh_token: &'a str,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RefreshResponse {
     pub protocol_version: u32,

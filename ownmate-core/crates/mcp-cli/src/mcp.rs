@@ -12,6 +12,18 @@ use zeroize::Zeroizing;
 const MAX_REQUEST_LINE_BYTES: usize = 1024 * 1024;
 
 pub fn serve_stdio(session: &mut ExternalSession) -> Result<()> {
+    serve(
+        session,
+        &mut std::io::stdin().lock(),
+        &mut std::io::stdout().lock(),
+    )
+}
+
+fn serve(
+    session: &mut ExternalSession,
+    input: &mut impl BufRead,
+    output: &mut impl Write,
+) -> Result<()> {
     let decoded = STANDARD
         .decode(&session.dek_base64)
         .map_err(|_| McpError::Invalid("系统凭据库中的 DEK 无效".into()))?;
@@ -20,13 +32,11 @@ pub fn serve_stdio(session: &mut ExternalSession) -> Result<()> {
     }
     let dek = Zeroizing::new(decoded);
     let api = ExternalApiClient::new(&session.base_url)?;
-    let stdin = std::io::stdin();
-    let mut stdout = std::io::stdout().lock();
-    for line in stdin.lock().lines() {
+    for line in input.lines() {
         let line = line?;
         if line.len() > MAX_REQUEST_LINE_BYTES {
             write_response(
-                &mut stdout,
+                output,
                 json_rpc_error(Value::Null, -32600, "JSON-RPC 请求超限"),
             )?;
             continue;
@@ -35,7 +45,7 @@ pub fn serve_stdio(session: &mut ExternalSession) -> Result<()> {
             Ok(request) => request,
             Err(_) => {
                 write_response(
-                    &mut stdout,
+                    output,
                     json_rpc_error(Value::Null, -32700, "JSON-RPC 解析失败"),
                 )?;
                 continue;
@@ -52,7 +62,7 @@ pub fn serve_stdio(session: &mut ExternalSession) -> Result<()> {
             Err(DispatchError::InvalidParams(message)) => json_rpc_error(id, -32602, &message),
             Err(DispatchError::Internal(error)) => json_rpc_error(id, -32000, &error.to_string()),
         };
-        write_response(&mut stdout, response)?;
+        write_response(output, response)?;
     }
     Ok(())
 }
@@ -361,6 +371,20 @@ fn write_response(output: &mut impl Write, value: Value) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stdio_consumes_only_mcp_messages_and_emits_only_json_rpc() {
+        let mut session = crate::reminders::fixture_session();
+        let mut input = std::io::Cursor::new(b"{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}\n");
+        let mut output = Vec::new();
+        serve(&mut session, &mut input, &mut output).unwrap();
+        let text = String::from_utf8(output).unwrap();
+        assert_eq!(text.lines().count(), 1);
+        let response: Value = serde_json::from_str(text.trim()).unwrap();
+        assert_eq!(response["id"], 1);
+        assert_eq!(response["jsonrpc"], "2.0");
+        assert!(!text.contains("SYNTHETIC_") && !text.contains(&session.dek_base64));
+    }
 
     #[test]
     fn typed_resource_uris_preserve_namespace_and_reject_path_escape() {

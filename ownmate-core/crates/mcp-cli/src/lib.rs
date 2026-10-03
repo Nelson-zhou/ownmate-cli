@@ -2,6 +2,8 @@ pub mod api;
 pub mod command_cache;
 pub mod crypto;
 pub mod mcp;
+pub mod pairing;
+pub mod profiles;
 pub mod projection;
 pub mod protocol;
 pub mod query;

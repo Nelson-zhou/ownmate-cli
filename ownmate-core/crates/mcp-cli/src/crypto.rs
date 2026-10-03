@@ -72,7 +72,8 @@ impl PairingIdentity {
         {
             return Err(McpError::Crypto);
         }
-        let field: WrappedDekField = serde_json::from_str(&envelope.wrapped_dek)?;
+        let field: WrappedDekField =
+            serde_json::from_str(&envelope.wrapped_dek).map_err(|_| McpError::Crypto)?;
         let expected_expiry = grant_expires_at.unwrap_or(0);
         if field.version != 2
             || field.envelope_type != "ownmate-external-key-envelope"

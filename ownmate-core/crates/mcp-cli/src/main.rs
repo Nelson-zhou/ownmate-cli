@@ -255,7 +255,7 @@ fn pair_and_serve(options: PairOptions) -> Result<()> {
     validate_pairing_response(&pairing)?;
     let pairing_secret = Zeroizing::new(std::mem::take(&mut pairing.pairing_secret));
 
-    eprintln!("请在 OwnMate → 设置 → 设备与外部访问 → 扫码授权 中扫描：");
+    eprintln!("请在 OwnMate → 设置 → 扫一扫 中扫描：");
     eprintln!("核对码：{}", pairing.verification_code);
     eprintln!("公钥指纹：{}", pairing.client_fingerprint);
     eprintln!("{}", render_qr(&pairing.qr_payload)?);

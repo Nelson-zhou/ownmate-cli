@@ -38,6 +38,14 @@ ownmate-mcp pair --name "My computer"
 - 临时授权：最多 30 分钟，仅当前 `pair` 进程有效，不落盘；通过该进程的 MCP stdio 使用。
 - 信任设备：连接凭据进入 macOS Keychain、Windows Credential Manager 或 Linux keyring，后续终端命令可用；可在 App 撤销。
 
+### macOS 可信授权与 SSH
+
+可信模式需要程序所在用户能访问系统凭据库。macOS 推荐在 Mac 本机桌面登录用户的终端或 MCP Host 运行，并按系统提示确认 Keychain 访问；SSH 或后台上下文若需要系统交互，可能无法完成可信凭据保存，不能保证 SSH 始终可用。
+
+如果手机批准后 `pair` 报 `Platform secure storage failure: User interaction is not allowed`，手机批准已完成，但电脑没有完成可信凭据保存，CLI 会退出而未进入 MCP 会话。此错误表示当前运行上下文不允许 Keychain 所需交互，不能仅凭它判断是 Keychain 锁定还是条目访问规则需要确认。见 [Apple 的 errSecInteractionNotAllowed 定义](https://developer.apple.com/documentation/security/errsecinteractionnotallowed)。请在 Mac 本机桌面用户的终端/MCP Host 中使用可信模式，并按系统提示处理；不要把保存失败当成已有可用连接，也不要假定旧凭据已被替换。
+
+需要临时使用时，由你在手机配对页明确选择「仅本次使用（30 分钟）」，并保持同一 `pair` 进程及 stdin 打开，通过该进程的 MCP Resources/Tools 操作。stdin 结束、进程退出或到期后该会话结束。另起 `mcp` 或 `reminders create/update` 等命令会读取可信授权，不能复用临时会话。临时凭据与重试密文仅在内存；程序不会自动将失败的可信授权改为临时模式，不自动解锁、放宽凭据库访问规则或把凭据保存成普通文件。
+
 ## 提醒专用命令
 
 先读取程序随附的字段规范，或离线检查请求：

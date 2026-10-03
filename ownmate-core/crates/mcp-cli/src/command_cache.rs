@@ -184,11 +184,17 @@ pub(crate) fn private_directory(directory: &Path) -> Result<()> {
 #[cfg(target_os = "windows")]
 pub(crate) fn private_directory(directory: &Path) -> Result<()> {
     if let Some(parent) = directory.parent() {
-        fs::create_dir_all(parent)?;
-        protect_windows_directory(parent)?;
+        windows_acl_step(
+            fs::create_dir_all(parent).map_err(McpError::from),
+            "create parent",
+        )?;
+        windows_acl_step(protect_windows_directory(parent), "protect parent")?;
     }
-    fs::create_dir_all(directory)?;
-    protect_windows_directory(directory)
+    windows_acl_step(
+        fs::create_dir_all(directory).map_err(McpError::from),
+        "create directory",
+    )?;
+    windows_acl_step(protect_windows_directory(directory), "protect directory")
 }
 
 #[cfg(all(not(unix), not(target_os = "windows")))]
@@ -215,7 +221,10 @@ pub(crate) fn private_file(path: &Path, metadata: &fs::Metadata) -> Result<()> {
         if metadata.file_attributes() & 0x400 != 0 {
             return Err(invalid());
         }
-        verify_windows_acl(path, &windows_sid()?)?;
+        windows_acl_step(
+            verify_windows_acl(path, &windows_sid()?),
+            "verify private file",
+        )?;
     }
     #[cfg(not(target_os = "windows"))]
     let _ = path;
@@ -228,9 +237,14 @@ fn windows_sid() -> Result<String> {
         .args(["/user", "/fo", "csv", "/nh"])
         .output()?;
     if !result.status.success() {
+        #[cfg(test)]
+        eprintln!("Windows ACL diagnostic: whoami command failed");
         return Err(invalid());
     }
-    let output = String::from_utf8(result.stdout).map_err(|_| invalid())?;
+    let output = windows_acl_step(
+        String::from_utf8(result.stdout).map_err(|_| invalid()),
+        "decode whoami",
+    )?;
     let sid = output
         .split('"')
         .find(|value| {
@@ -239,7 +253,8 @@ fn windows_sid() -> Result<String> {
                     .bytes()
                     .all(|b| b.is_ascii_digit() || b == b'-' || b == b'S')
         })
-        .ok_or_else(invalid)?;
+        .ok_or_else(invalid);
+    let sid = windows_acl_step(sid, "parse current SID")?;
     Ok(sid.to_owned())
 }
 
@@ -261,6 +276,8 @@ fn protect_windows_directory(path: &Path) -> Result<()> {
         .arg("/reset")
         .output()?;
     if !reset.status.success() {
+        #[cfg(test)]
+        eprintln!("Windows ACL diagnostic: icacls reset command failed");
         return Err(invalid());
     }
     let result = std::process::Command::new("icacls.exe")
@@ -269,6 +286,8 @@ fn protect_windows_directory(path: &Path) -> Result<()> {
         .arg(format!("*{sid}:(OI)(CI)F"))
         .output()?;
     if !result.status.success() {
+        #[cfg(test)]
+        eprintln!("Windows ACL diagnostic: icacls private grant command failed");
         return Err(invalid());
     }
     verify_windows_acl(path, &sid)
@@ -286,27 +305,63 @@ fn verify_windows_acl(path: &Path, sid: &str) -> Result<()> {
         .arg(&acl_file)
         .output()?;
     if !result.status.success() {
+        #[cfg(test)]
+        eprintln!("Windows ACL diagnostic: icacls save command failed");
         let _ = fs::remove_file(&acl_file);
         return Err(invalid());
     }
     let bytes = fs::read(&acl_file);
     let _ = fs::remove_file(&acl_file);
     let bytes = bytes?;
-    let content = decode_windows_acl(&bytes)?;
+    let content = windows_acl_step(decode_windows_acl(&bytes), "decode icacls ACL")?;
+    verify_windows_sddl(&content, sid)
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn verify_windows_sddl(content: &str, sid: &str) -> Result<()> {
     let sddl = content
         .lines()
         .find(|line| line.starts_with("D:"))
-        .ok_or_else(invalid)?;
+        .ok_or_else(invalid);
+    #[cfg(test)]
+    if sddl.is_err() {
+        eprintln!("Windows ACL diagnostic: missing DACL line");
+    }
+    let sddl = sddl?;
     let aces: Vec<_> = sddl.split('(').skip(1).collect();
     if aces.len() != 1 {
+        #[cfg(test)]
+        eprintln!(
+            "Windows ACL diagnostic: expected one ACE; count={}",
+            aces.len()
+        );
         return Err(invalid());
     }
     let ace = aces[0].split(')').next().ok_or_else(invalid)?;
     let fields: Vec<_> = ace.split(';').collect();
     if fields.len() != 6 || fields[0] != "A" || fields[2] != "FA" || fields[5] != sid {
+        #[cfg(test)]
+        eprintln!(
+            "Windows ACL diagnostic: one ACE rejected; shape={} allow={} full_access={} current_principal={}",
+            fields.len() == 6,
+            fields.first() == Some(&"A"),
+            fields.get(2) == Some(&"FA"),
+            fields.get(5) == Some(&sid)
+        );
         return Err(invalid());
     }
     Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn windows_acl_step<T>(result: Result<T>, stage: &str) -> Result<T> {
+    #[cfg(test)]
+    if result.is_err() {
+        eprintln!("Windows ACL diagnostic: failed at {stage}");
+    }
+    #[cfg(not(test))]
+    let _ = stage;
+    result
 }
 
 #[cfg(any(target_os = "windows", test))]
@@ -337,6 +392,25 @@ mod windows_acl_decoding_tests {
         assert!(decode_windows_acl(&[0]).is_err());
         assert!(decode_windows_acl(&[0, 0xd8]).is_err());
         assert!(decode_windows_acl(&vec![0; 16386]).is_err());
+    }
+
+    #[test]
+    fn private_sddl_accepts_only_one_full_access_current_user_ace() {
+        let sid = "S-1-5-21-123";
+        assert!(
+            verify_windows_sddl(&format!("synthetic\r\nD:PAI(A;OICI;FA;;;{sid})\r\n"), sid).is_ok()
+        );
+        assert!(
+            verify_windows_sddl(&format!("synthetic\r\nD:AI(A;ID;FA;;;{sid})\r\n"), sid).is_ok()
+        );
+        for sddl in [
+            "D:PAI",
+            "D:PAI(A;OICI;FR;;;S-1-5-21-123)",
+            "D:PAI(A;OICI;FA;;;S-1-5-21-999)",
+            "D:PAI(A;OICI;FA;;;S-1-5-21-123)(A;OICI;FA;;;S-1-5-21-999)",
+        ] {
+            assert!(verify_windows_sddl(sddl, sid).is_err());
+        }
     }
 }
 

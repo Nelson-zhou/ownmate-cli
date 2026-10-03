@@ -8,6 +8,7 @@ use ownmate_mcp::{DEFAULT_API_BASE_URL, McpError, Result};
 use qrcode::QrCode;
 use qrcode::render::unicode;
 use serde_json::Value;
+use std::io::Read;
 use std::time::Duration;
 use zeroize::Zeroizing;
 
@@ -21,6 +22,7 @@ fn main() {
 fn run() -> Result<()> {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
+        Some("reminders") => reminder_interface_command(args.collect()),
         Some("pair") => {
             let options = PairOptions::parse(args.collect())?;
             pair_and_serve(options)
@@ -125,6 +127,79 @@ fn run() -> Result<()> {
         }
         Some(other) => Err(McpError::Invalid(format!("未知命令: {other}"))),
     }
+}
+
+fn reminder_interface_command(args: Vec<String>) -> Result<()> {
+    match args.as_slice() {
+        [command] if command == "schema" => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&ownmate_mcp::reminder_interface::contract()?)?
+            );
+            Ok(())
+        }
+        [command, operation, input, source]
+            if command == "validate" && input == "--input" && source == "-" =>
+        {
+            // Local shape validation only: never load credentials or construct an API client.
+            let value = read_reminder_input()?;
+            let result = ownmate_mcp::reminder_interface::validate(operation, value)?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+            Ok(())
+        }
+        [operation, input, source] if (operation == "create" || operation == "update") && input == "--input" && source == "-" => {
+            execute_reminder_write(operation, None)
+        }
+        [operation, id, input, source] if operation == "update" && input == "--input" && source == "-" => {
+            execute_reminder_write(operation, Some(id))
+        }
+        [command, id] if command == "read" || command == "request-status" => {
+            let mut session = load_trusted()?;
+            let api = ExternalApiClient::new(&session.base_url)?;
+            let result = if command == "read" {
+                let key = ownmate_mcp::reminders::decode_dek(&session)?;
+                ownmate_mcp::reminders::read(&api, &mut session, &key, id)?
+            } else { ownmate_mcp::reminders::request_status(&api, &mut session, id)? };
+            println!("{}", serde_json::to_string_pretty(&result)?); Ok(())
+        }
+        [command, options @ ..] if command == "list" => {
+            let query = ownmate_mcp::reminders::ReminderListQuery::cli(options.to_vec())?;
+            let mut session = load_trusted()?; let api = ExternalApiClient::new(&session.base_url)?;
+            let key = ownmate_mcp::reminders::decode_dek(&session)?;
+            println!("{}",serde_json::to_string_pretty(&ownmate_mcp::reminders::list(&api,&mut session,&key,query)?)?); Ok(())
+        }
+        _ => Err(McpError::Invalid(
+            "提醒命令无效；写入仅接受 create 或 update [ID] --input -，内容必须通过标准输入 JSON 提交".into(),
+        )),
+    }
+}
+
+fn read_reminder_input() -> Result<Value> {
+    let mut bytes = Zeroizing::new(Vec::new());
+    std::io::stdin()
+        .lock()
+        .take(512 * 1024 + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > 512 * 1024 {
+        return Err(McpError::Invalid("待办输入超过 512 KiB".into()));
+    }
+    serde_json::from_slice(&bytes).map_err(|_| McpError::Invalid("待办输入必须是有效 JSON".into()))
+}
+
+fn execute_reminder_write(operation: &str, id: Option<&str>) -> Result<()> {
+    let value = read_reminder_input()?;
+    ownmate_mcp::reminder_interface::validate(operation, value.clone())?;
+    if id.is_some_and(|id| value["reminderId"] != id) {
+        return Err(McpError::Invalid(
+            "命令事项 ID 与输入 reminderId 不匹配".into(),
+        ));
+    }
+    let mut session = load_trusted()?;
+    let api = ExternalApiClient::new(&session.base_url)?;
+    let key = ownmate_mcp::reminders::decode_dek(&session)?;
+    let result = ownmate_mcp::reminders::submit(&api, &mut session, &key, operation, value)?;
+    println!("{}", serde_json::to_string_pretty(&result)?);
+    Ok(())
 }
 
 struct PairOptions {
@@ -235,8 +310,15 @@ fn pair_and_serve(options: PairOptions) -> Result<()> {
             grant_expires_at: exchange.grant_expires_at,
             dek_key_id,
             dek_base64: STANDARD.encode(&dek),
+            keyspace_id: Some(envelope.keyspace_id.clone()),
+            keyspace_generation: Some(envelope.keyspace_generation),
             scopes: exchange.scopes,
+            write_context: exchange.write_context,
+            temporary_commands: Vec::new(),
         };
+        if session.scopes.iter().any(|s| s == "reminders:write") {
+            ownmate_mcp::reminders::validate_write_context(&session)?;
+        }
         if trust_mode == "trusted" {
             if session.refresh_token.is_none() {
                 return Err(McpError::Invalid("可信授权缺少 refreshToken".into()));
@@ -284,7 +366,7 @@ fn render_qr(payload: &str) -> Result<String> {
 }
 
 fn print_help() {
-    eprintln!("OwnMate CLI/MCP（只读）");
+    eprintln!("OwnMate CLI/MCP（按手机明确授权）");
     eprintln!("  ownmate-mcp pair [--name NAME] [--base-url URL]");
     eprintln!("  ownmate-mcp mcp");
     eprintln!("  ownmate-mcp disconnect");
@@ -293,6 +375,16 @@ fn print_help() {
         "  ownmate-mcp query [--contains TEXT] [--tag TAG] [--from YYYY-MM-DD] [--through YYYY-MM-DD]"
     );
     eprintln!("  ownmate-mcp read ENTRY_ID        输出指定记录的 JSON");
+    eprintln!("  ownmate-mcp reminders schema     离线输出待办字段规范、示例与权限说明");
+    eprintln!("  ownmate-mcp reminders validate create|update --input -");
+    eprintln!("                                  仅校验输入形状，不联网、不写入事项");
+    eprintln!(
+        "  ownmate-mcp reminders list [--filter all|today|overdue|range|noDate] [--status PENDING|COMPLETED] [--time-zone IANA] [--from YYYY-MM-DD --through YYYY-MM-DD]"
+    );
+    eprintln!("  ownmate-mcp reminders read ID");
+    eprintln!("  ownmate-mcp reminders create --input -");
+    eprintln!("  ownmate-mcp reminders update ID --input -");
+    eprintln!("  ownmate-mcp reminders request-status REQUEST_ID");
     eprintln!("  ownmate-mcp --version");
     eprintln!("pair 会显示二维码；手机决定临时 30 分钟或信任设备，然后当前进程进入 MCP stdio。");
 }

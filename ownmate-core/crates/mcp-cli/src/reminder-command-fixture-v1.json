@@ -1,0 +1,24 @@
+{
+  "description": "Synthetic DEK/nonce, fixed UTF-8 payload and expectedVersion for Rust/Android interoperability. Never production credentials.",
+  "dekHex": "0707070707070707070707070707070707070707070707070707070707070707",
+  "plaintextJson": "{\"due\":{\"kind\":\"none\"},\"recurrence\":\"NONE\",\"requestId\":\"fixture_request_001\",\"title\":\"fixture title\"}",
+  "envelope": {
+    "protocolVersion": 1,
+    "requestId": "fixture_request_001",
+    "operation": "CREATE",
+    "grantId": "fixture_grant",
+    "keyspaceId": "fixture_space",
+    "keyspaceGeneration": 3,
+    "targetDeviceId": "fixture_phone",
+    "targetReminderId": "r_ext_231591ea5f25e6696eb0ceb1d4d4aec36ded98043bd5e3ea30d4a2e4466f4638",
+    "createdAt": 1800000000000,
+    "expiresAt": 1800086400000,
+    "keyId": "ownmate_dek_v1",
+    "algorithm": "AES-256-GCM",
+    "encryptionVersion": 1,
+    "nonce": "CQkJCQkJCQkJCQkJ",
+    "ciphertext": "XKfg4dvS+xqCCaJWgsiZ/brfDZYWk9viHcsl06cGZBSwgMX5wBxlXjqRiTQ2UZKhGSfq3Xa2lGwDBnnjI2Qf0R4a+XvsVZj86ND4VpPL8Jxpha40kSWi1AXLI/Q6p3kLdx2xsbT67vYHqTnwWq1jqO2rV99Z"
+  },
+  "reminderPayloadJson": "{\"payloadVersion\":2,\"resourceType\":\"reminder\",\"reminder\":{\"id\":\"fixture\",\"title\":\"fixture\",\"notes\":\"line1\\nline2\",\"dueAtMillis\":null,\"recurrence\":\"NONE\",\"status\":\"PENDING\",\"completedAtMillis\":null,\"createdAt\":1,\"updatedAt\":2,\"schedulingDeviceId\":\"fixture_phone\",\"completionCycle\":0}}",
+  "expectedVersion": "rv1:d300ef738d3be641eb6872ff4e2eadd3d83d29b958b33911e1142ef9f8f95895"
+}

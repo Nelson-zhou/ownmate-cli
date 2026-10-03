@@ -1,5 +1,7 @@
 # OwnMate CLI / MCP
 
-安装、授权、分类读取、查询、MCP 配置与安全边界统一见[仓库 README](../../../README.md)。
+`ownmate-mcp` is the scoped OwnMate connector for terminal commands and stdio MCP Hosts. It decrypts approved records locally and submits encrypted CREATE/UPDATE reminder commands for the approved phone to apply. Reminder write does not imply read and cannot complete, delete, or modify notebook content.
 
-本 crate 是本地只读连接器，不含 Android App 或后端。旧凭据不自动扩权。提醒及完成历史消费载荷 v2，完成资源身份绑定发生次与轮次，不使用完成时间代替身份。
+See the [repository README](../../../README.md) for installation, phone approval, input fields, result stages, limits, timezone support, privacy, and acceptance boundaries. The embedded [reminder interface](src/reminder-interface-v1.json) is available with `ownmate-mcp reminders schema`; `reminders validate create|update --input -` validates stdin JSON offline without accessing credentials or records.
+
+Build from the repository root with `cargo build --locked --release --manifest-path ownmate-core/Cargo.toml -p ownmate-mcp`. This module owns transport, input validation, cryptography, credential storage, retry ciphertext, and projections. It does not implement another reminder database, AI provider, or background scheduler. A disabled reminder capability or unavailable phone cannot bypass normal App business rules; core journaling remains independent.

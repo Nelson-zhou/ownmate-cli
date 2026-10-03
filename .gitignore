@@ -1,4 +1,5 @@
 ownmate-core/target/
+dist/
 *.env
 .env*
 *.pem

@@ -7,10 +7,18 @@
     "temporaryGrantTtlSeconds": 1800,
     "modes": ["temporary", "trusted"],
     "scope": "journals:read",
-    "availableScopes": ["journals:read", "fragments:read", "reminders:read"],
+    "availableScopes": ["journals:read", "fragments:read", "reminders:read", "reminders:write"],
     "legacyMissingScopes": ["journals:read"],
     "scopeSelection": "explicit nonempty unique subset; immutable after approval; malformed explicit scopes fail closed",
     "publicKey": "P-256 X.509 SubjectPublicKeyInfo DER, standard Base64"
+  },
+  "permissionChoices": {
+    "remindersRead": ["reminders:read"],
+    "remindersWrite": ["reminders:write"],
+    "notebooksRead": ["journals:read", "fragments:read"],
+    "writeImpliesRead": false,
+    "defaultChecked": [],
+    "existingGrantsAutoExpanded": false
   },
   "keyEnvelope": {
     "version": 2,
@@ -31,7 +39,15 @@
   },
   "mcp": {
     "transport": "stdio",
-    "capabilities": ["resources"],
+    "capabilities": ["resources", "tools"],
+    "toolScopes": {
+      "reminders_list": "reminders:read",
+      "reminders_read": "reminders:read",
+      "reminders_create": "reminders:write",
+      "reminders_update": "reminders:write",
+      "reminders_request_status": "reminders:write"
+    },
+    "toolsFilteredByActualScopes": true,
     "resourceUriTemplate": "ownmate://journal/{entryId}",
     "resourceUriTemplates": {
       "journal": "ownmate://journal/{entryId}",
@@ -39,7 +55,58 @@
       "reminder": "ownmate://reminders/{entryId}",
       "reminderCompletion": "ownmate://reminder-completions/{entryId}"
     },
-    "forbiddenCapabilities": ["tools", "prompts", "subscriptions", "writes"]
+    "forbiddenCapabilities": ["prompts", "subscriptions", "genericWrites", "documentWrites", "completeReminder", "deleteReminder"]
+  },
+  "reminderCommands": {
+    "protocolVersion": 1,
+    "capabilityVersion": 1,
+    "scope": "reminders:write",
+    "actions": ["CREATE", "UPDATE"],
+    "itemsPerRequest": 1,
+    "submit": "POST /external-access/v1/reminder-commands",
+    "status": "GET /external-access/v1/reminder-commands/{requestId}",
+    "phoneQueue": "GET /external-access/v1/management/reminder-commands",
+    "phoneClaim": "POST /external-access/v1/management/reminder-commands/{commandId}/claim",
+    "phoneResult": "POST /external-access/v1/management/reminder-commands/{commandId}/result",
+    "requestIdPattern": "^[A-Za-z0-9_-]{16,128}$",
+    "cipher": "AES-256-GCM",
+    "encryptionVersion": 1,
+    "nonceBytes": 12,
+    "aadSeparator": "U+001F",
+    "maxPlaintextBytes": 524288,
+    "maxCiphertextBytes": 524304,
+    "aadFields": ["OwnMate ReminderCommand v1", "grantId", "requestId", "operation", "keyspaceId", "keyspaceGeneration", "targetDeviceId", "targetReminderId", "createdAt", "expiresAt", "keyId"],
+    "createdReminderId": "r_ext_ + lowercase SHA-256 UTF-8(grantId + LF + requestId)",
+    "expectedVersion": "rv1: + lowercase SHA-256 UTF-8(keyspaceId + LF + decimal generation + LF + reminderId + LF + exact Android ReminderCloudPayloadCodec JSON)",
+    "payloadSchema": "ownmate-core/crates/mcp-cli/src/reminder-interface-v1.json",
+    "syntheticCryptoFixture": "ownmate-core/crates/mcp-cli/src/reminder-command-fixture-v1.json",
+    "policy": {
+      "commandTtlMs": 86400000,
+      "permitTtlMs": 60000,
+      "dateHorizonDays": 90,
+      "datePolicy": "today_through_90_days",
+      "requestBurst": 5,
+      "requestsPerMinute": 20,
+      "createsPer24Hours": 50,
+      "updatesPer24Hours": 200,
+      "updatesPerTargetPer24Hours": 5,
+      "pendingPerAccount": 50,
+      "maxClaimsPerCommand": 32
+    },
+    "quotaIdentity": "account; shared across grants/re-pairing; rolling windows; manual App edits excluded",
+    "statuses": ["queued", "applied", "rejected", "conflict", "expired"],
+    "operationStatuses": ["applied", "rejected", "conflict"],
+    "notificationStatuses": ["pending", "scheduled", "permission_denied", "disabled", "failed", "not_needed"],
+    "syncVisibilityStatuses": ["pending", "visible", "failed", "not_applicable"],
+    "retryExtendsExpiry": false,
+    "pastDueCatchUpNotifications": false,
+    "writeOnlyCanReadExistingReminders": false,
+    "minimalDedupMarkerHasTtl": false,
+    "detailRetentionAfterExpiryMs": 604800000,
+    "foregroundProcessingOnly": true,
+    "revocationBoundary": "atomic Grant permit issuance; an already issued unexpired permit may commit; existing facts are not rolled back",
+    "productionFlag": "FEATURE_EXTERNAL_REMINDER_WRITES_ENABLED",
+    "productionDefaultEnabled": false
   },
   "resourceScopes": {
     "journal": "journals:read",

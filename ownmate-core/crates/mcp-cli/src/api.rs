@@ -1,7 +1,7 @@
 use crate::protocol::{
     ApiEnvelope, CreatePairingRequest, CreatePairingResponse, ExchangePairingRequest,
     ExchangePairingResponse, JournalItemResponse, JournalPage, OpaqueJournal, RefreshRequest,
-    RefreshResponse,
+    RefreshResponse, ReminderCommandEnvelope, ReminderCommandReceipt,
 };
 use crate::storage::{ExternalSession, save_trusted};
 use crate::{McpError, Result};
@@ -44,6 +44,44 @@ pub struct ExternalApiClient {
 }
 
 impl ExternalApiClient {
+    pub fn submit_reminder_command(
+        &self,
+        session: &mut ExternalSession,
+        command: &ReminderCommandEnvelope,
+    ) -> Result<ReminderCommandReceipt> {
+        session.require_scope("reminders:write")?;
+        self.ensure_access(session)?;
+        let first = self.authorized_post(
+            "/external-access/v1/reminder-commands",
+            &session.access_token,
+            command,
+        )?;
+        if first.0 != 401 {
+            return decode_response(first);
+        }
+        self.refresh(session)?;
+        session.require_scope("reminders:write")?;
+        decode_response(self.authorized_post(
+            "/external-access/v1/reminder-commands",
+            &session.access_token,
+            command,
+        )?)
+    }
+
+    pub fn reminder_request_status(
+        &self,
+        session: &mut ExternalSession,
+        request_id: &str,
+    ) -> Result<ReminderCommandReceipt> {
+        session.require_scope("reminders:write")?;
+        self.get_authorized(
+            session,
+            &format!(
+                "/external-access/v1/reminder-commands/{}",
+                percent_encode(request_id)
+            ),
+        )
+    }
     pub fn new(base_url: &str) -> Result<Self> {
         let normalized = base_url.trim().trim_end_matches('/').to_string();
         let local = normalized.starts_with("http://127.0.0.1:")
@@ -180,11 +218,11 @@ impl ExternalApiClient {
         self.ensure_access(session)?;
         let first = self.authorized_get(path, &session.access_token)?;
         if first.0 != 401 {
-            return decode_envelope(first.0, &first.1);
+            return decode_response(first);
         }
         self.refresh(session)?;
         let retry = self.authorized_get(path, &session.access_token)?;
-        decode_envelope(retry.0, &retry.1)
+        decode_response(retry)
     }
 
     fn ensure_access(&self, session: &mut ExternalSession) -> Result<()> {
@@ -206,6 +244,21 @@ impl ExternalApiClient {
         if refreshed.protocol_version != 1 {
             return Err(McpError::Invalid("外部访问令牌协议版本不兼容".into()));
         }
+        if let Some(scopes) = &refreshed.scopes {
+            crate::storage::validate_scopes(scopes)?;
+            let old: std::collections::HashSet<_> = session.scopes.iter().collect();
+            let new: std::collections::HashSet<_> = scopes.iter().collect();
+            if old != new {
+                return Err(McpError::Invalid("刷新令牌不得改变原授权范围".into()));
+            }
+        }
+        if let Some(context) = &refreshed.write_context {
+            if session.write_context.as_ref() != Some(context) {
+                return Err(McpError::Invalid("刷新令牌不得改变原写授权身份".into()));
+            }
+        } else if session.scopes.iter().any(|s| s == "reminders:write") {
+            return Err(McpError::Invalid("刷新响应缺少原写授权身份".into()));
+        }
         session.access_token = refreshed.access_token;
         session.access_expires_at = refreshed.access_expires_at;
         if session.is_trusted() {
@@ -222,16 +275,17 @@ impl ExternalApiClient {
             .send_json(body)
             .map_err(|error| McpError::Network(error.to_string()))?;
         let status = response.status().as_u16();
+        let retry_after = retry_after_header(&response);
         let text = response
             .body_mut()
             .with_config()
             .limit(MAX_RESPONSE_BYTES)
             .read_to_string()
             .map_err(|error| McpError::Network(error.to_string()))?;
-        decode_envelope(status, &text)
+        decode_response((status, text, retry_after))
     }
 
-    fn authorized_get(&self, path: &str, access_token: &str) -> Result<(u16, String)> {
+    fn authorized_get(&self, path: &str, access_token: &str) -> Result<(u16, String, Option<u64>)> {
         let mut response = self
             .agent
             .get(format!("{}{}", self.base_url, path))
@@ -240,14 +294,65 @@ impl ExternalApiClient {
             .call()
             .map_err(|error| McpError::Network(error.to_string()))?;
         let status = response.status().as_u16();
+        let retry_after = retry_after_header(&response);
         let body = response
             .body_mut()
             .with_config()
             .limit(MAX_RESPONSE_BYTES)
             .read_to_string()
             .map_err(|error| McpError::Network(error.to_string()))?;
-        Ok((status, body))
+        Ok((status, body, retry_after))
     }
+
+    fn authorized_post<B: Serialize>(
+        &self,
+        path: &str,
+        access_token: &str,
+        body: &B,
+    ) -> Result<(u16, String, Option<u64>)> {
+        let mut response = self
+            .agent
+            .post(format!("{}{}", self.base_url, path))
+            .header("Accept", "application/json")
+            .header("Authorization", format!("Bearer {access_token}"))
+            .send_json(body)
+            .map_err(|error| McpError::Network(error.to_string()))?;
+        let status = response.status().as_u16();
+        let retry_after = retry_after_header(&response);
+        let body = response
+            .body_mut()
+            .with_config()
+            .limit(MAX_RESPONSE_BYTES)
+            .read_to_string()
+            .map_err(|error| McpError::Network(error.to_string()))?;
+        Ok((status, body, retry_after))
+    }
+}
+
+fn retry_after_header(response: &ureq::http::Response<ureq::Body>) -> Option<u64> {
+    response
+        .headers()
+        .get("Retry-After")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse().ok())
+}
+
+fn decode_response<T: DeserializeOwned>(
+    (status, body, retry_after): (u16, String, Option<u64>),
+) -> Result<T> {
+    if status == 429 {
+        let value: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
+        return Err(McpError::RateLimited {
+            retry_after_seconds: retry_after
+                .or_else(|| value["retryAfter"].as_u64())
+                .or_else(|| value["data"]["retryAfter"].as_u64())
+                .or_else(|| value["retryAfterSeconds"].as_u64())
+                .or_else(|| value["data"]["retryAfterSeconds"].as_u64())
+                .unwrap_or(60)
+                .max(1),
+        });
+    }
+    decode_envelope(status, &body)
 }
 
 fn validate_list_identity(id: &str, seen: &mut std::collections::HashSet<String>) -> Result<()> {
@@ -271,6 +376,18 @@ fn validate_next_cursor(next: &str, seen: &mut std::collections::HashSet<String>
 }
 
 fn decode_envelope<T: DeserializeOwned>(status: u16, body: &str) -> Result<T> {
+    if !(200..300).contains(&status) {
+        let value: serde_json::Value = serde_json::from_str(body)?;
+        let code = value["data"]["code"]
+            .as_str()
+            .filter(|s| s.len() <= 80 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'))
+            .unwrap_or("API_REJECTED");
+        return Err(McpError::ApiResponse {
+            status,
+            code: code.into(),
+            message: value["message"].as_str().unwrap_or("请求未获批准").into(),
+        });
+    }
     let envelope: ApiEnvelope<T> = serde_json::from_str(body)?;
     if !(200..300).contains(&status) || !envelope.ok {
         return Err(McpError::Api(
@@ -331,6 +448,10 @@ mod tests {
             dek_key_id: "fixture".into(),
             dek_base64: String::new(),
             scopes: vec!["reminders:read".into()],
+            keyspace_id: None,
+            keyspace_generation: None,
+            write_context: None,
+            temporary_commands: Vec::new(),
         };
         for kind in [ReadResource::Journal, ReadResource::Fragment] {
             let error = api.list_resources(&mut session, kind).unwrap_err();

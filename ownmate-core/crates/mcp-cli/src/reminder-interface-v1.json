@@ -1,0 +1,251 @@
+{
+  "protocolVersion": 1,
+  "name": "OwnMate reminder interface",
+  "lifecycle": {
+    "status": "enabled",
+    "writeEnabled": true,
+    "productionVerified": false,
+    "description": "本地源码支持按授权读取、创建/修改及本 Grant 回执，enabled 仅说明源码能力，不表示生产部署或手机端到端验收。queued 不是手机已保存，离线 shape_valid 不是已提交。"
+  },
+  "localCommands": {
+    "schema": "ownmate-mcp reminders schema",
+    "validateCreate": "ownmate-mcp reminders validate create --input -",
+    "validateUpdate": "ownmate-mcp reminders validate update --input -",
+    "maxInputBytes": 262144,
+    "list": "ownmate-mcp reminders list [--filter all|today|overdue|range|noDate] [--status PENDING|COMPLETED] [--time-zone IANA] [--from YYYY-MM-DD --through YYYY-MM-DD]",
+    "read": "ownmate-mcp reminders read ID",
+    "create": "ownmate-mcp reminders create --input -",
+    "update": "ownmate-mcp reminders update ID --input -",
+    "requestStatus": "ownmate-mcp reminders request-status REQUEST_ID",
+    "privacy": "离线校验不联网、不读取授权或记录、不持久化或回显输入；待办 JSON 通过标准输入传入。"
+  },
+  "permissions": {
+    "reminders:read": "读取待办及完成历史；不能写入。",
+    "reminders:write": "创建/修改计划字段；不隐含任何读取、完成、删除或记录正文写权限。旧 Grant 缺少写授权身份时失败关闭；动作集固定 CREATE/UPDATE。",
+    "notebooksReadSelection": ["journals:read", "fragments:read"],
+    "notebooksWriteEnabled": false,
+    "writeOnlyReceipts": "只写授权只能查询本 Grant 自己提交的操作阶段、ID 和本次结果版本，不能从回执/错误读取已有事项。"
+  },
+  "$defs": {
+    "requestId": {
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "description": "调用方生成并保存的稳定幂等 ID；同一操作重试必须复用，不因超时重新生成。不得放标题、备注或私人信息；同 ID 不能换请求内容。"
+    },
+    "reminderId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]+$",
+      "description": "服务返回的真实待办 ID；不得根据标题猜造或复用已删除身份。"
+    },
+    "expectedVersion": {
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 1024,
+      "pattern": "^[!-~]+$",
+      "description": "读取或本次已应用回执返回的不透明 rv1: 标记；原样提交，不自行拼装或只填云 revision。绑定空间代际与完整原始 Android Reminder 载荷，手机未上传修改也会冲突。旧凭据缺空间身份时版本为 null，须重新配对才可修改；只写客户端不能暗中读取补版本。"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "\\S",
+      "x-ownmate-maxUtf16Length": 200,
+      "description": "待办的简短动作标题，非空白；UTF-16 总长度最多 200（emoji 可能占两单位）。手机沿原有规则去首尾空白；不是 HTML、命令或记录正文。"
+    },
+    "notes": {
+      "type": "string",
+      "maxLength": 65536,
+      "x-ownmate-maxUtf16Length": 65536,
+      "description": "普通多行备注，UTF-16 最多 65536；创建省略表示空，修改省略表示保持原值，空字符串表示清空。"
+    },
+    "timeZone": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^(UTC|[A-Za-z_]+/[A-Za-z0-9._+-]+(/[A-Za-z0-9._+-]+)*)$",
+      "description": "明确 IANA 时区，如 Asia/Shanghai、America/New_York 或 UTC。离线仅检查格式。提交可用时读取本机 TZif 核验日期/偏移；无法解析时仅预拒绝明显超出 90 天的日期，手机最终验证真实 ZoneId/偏移。查询必须实际可解析，缺系统数据库时明确报错，UTC 各平台可用。"
+    },
+    "due": {
+      "description": "必须明确表达无日期、仅日期或具体时刻。不接受自然语言、null、毫秒数字或自动猜测；日期型沿 App 现有本地默认 09:00 调度，不表示禁止响铃。",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {"kind": {"const": "none"}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "date", "timeZone"],
+          "properties": {
+            "kind": {"const": "date"},
+            "date": {"type": "string", "format": "date", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$", "description": "真实有效的 YYYY-MM-DD；不能填 2026-02-30。"},
+            "timeZone": {"$ref": "#/$defs/timeZone"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "at", "timeZone"],
+          "properties": {
+            "kind": {"const": "dateTime"},
+            "at": {"type": "string", "format": "date-time", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:00(Z|[+-][0-9]{2}:[0-9]{2})$", "description": "RFC3339 带显式偏移，分钟精度、秒为 00；如 2026-10-04T20:30:00+08:00。不得省略时区、带小数秒或填非法日期/小时；-00:00 表示未知偏移，不能使用。"},
+            "timeZone": {"$ref": "#/$defs/timeZone"}
+          }
+        }
+      ]
+    },
+    "recurrence": {
+      "type": "string",
+      "enum": ["NONE", "DAILY", "WEEKLY"],
+      "description": "NONE=不重复，DAILY=每日，WEEKLY=每周原时刻；重复必须有日期。沿用排程手机的时区规则，不支持 RRULE/隔日/多选星期。"
+    },
+    "patch": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "title": {"$ref": "#/$defs/title"},
+        "notes": {"$ref": "#/$defs/notes"},
+        "due": {"$ref": "#/$defs/due"},
+        "recurrence": {"$ref": "#/$defs/recurrence"}
+      },
+      "description": "至少改一项；缺省字段保留原值，不接受 null。清除日期用 due.kind=none，若原项重复必须同时改 recurrence=NONE。手机核对最终组合、状态和版本。"
+    }
+  },
+  "operations": {
+    "list": {
+      "availability": "source_supported",
+      "requiredScope": "reminders:read",
+      "description": "读完云端所有授权提醒分页后本地筛选。today/overdue/range 必须明确可解析的 IANA timeZone；日期型逾期以所选自然日比较，具体时刻以当前时刻比较，无日期不算逾期。range 的 from/through 包含首尾自然日，内部使用次日零点排除边界，不加固定 24 小时。",
+      "inputSchema": {"type":"object","additionalProperties":false,"properties":{
+        "filter":{"type":"string","enum":["all","today","overdue","range","noDate"],"description":"默认 all；range 必须提供 from/through，其他筛选不得带范围日期。"},
+        "status":{"type":"string","enum":["PENDING","COMPLETED"]},
+        "timeZone":{"$ref":"#/$defs/timeZone"},
+        "from":{"type":"string","format":"date"},
+        "through":{"type":"string","format":"date"}
+      }},
+      "example":{"filter":"today","status":"PENDING","timeZone":"Asia/Shanghai"}
+    },
+    "read": {
+      "availability":"source_supported","requiredScope":"reminders:read",
+      "description":"读取真实事项、完整授权完成历史及 expectedVersion。缺空间身份的旧凭据给出 null 版本；不猜造历史、同步时刻或一致快照。",
+      "inputSchema":{"type":"object","additionalProperties":false,"required":["reminderId"],"properties":{"reminderId":{"$ref":"#/$defs/reminderId"}}}
+    },
+    "requestStatus": {
+      "availability":"source_supported","requiredScope":"reminders:write",
+      "description":"仅查询本 Grant 自己提交请求的最小操作回执，不获取事项全文/历史或冲突时当前版本；只写也可调用。queued 不代表手机应用，visible 不代表其他手机收到。",
+      "inputSchema":{"type":"object","additionalProperties":false,"required":["requestId"],"properties":{"requestId":{"$ref":"#/$defs/requestId"}}}
+    },
+    "create": {
+      "availability": "source_supported",
+      "requiredScope": "reminders:write",
+      "description": "创建一条未完成待办；不创建记录，不插入正文，不替用户完成事项。重试同一请求 ID，等待 applied 才能称手机已保存。",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["requestId", "title", "due", "recurrence"],
+        "properties": {
+          "requestId": {"$ref": "#/$defs/requestId"},
+          "title": {"$ref": "#/$defs/title"},
+          "notes": {"$ref": "#/$defs/notes"},
+          "due": {"$ref": "#/$defs/due"},
+          "recurrence": {"$ref": "#/$defs/recurrence"}
+        },
+        "description": "将接口顶层 $defs 同时装入本 schema 再执行 JSON Schema 校验；UTF-16、真实日历/时区及跨字段规则还须执行应用语义校验。"
+      },
+      "example": {
+        "requestId": "sample_walk_20261004_001",
+        "title": "晚饭后散步 20 分钟",
+        "notes": "带上水，按自己的节奏走。",
+        "due": {"kind": "dateTime", "at": "2026-10-04T20:30:00+08:00", "timeZone": "Asia/Shanghai"},
+        "recurrence": "NONE"
+      },
+      "undatedExample": {
+        "requestId": "sample_book_20261004_001",
+        "title": "整理想读的书单",
+        "due": {"kind": "none"},
+        "recurrence": "NONE"
+      }
+    },
+    "update": {
+      "availability": "source_supported",
+      "requiredScope": "reminders:write",
+      "description": "仅修改未完成事项的计划字段。需真实 ID 与当前版本；手机新修改、完成、删除或冲突时拒绝，不自动覆盖或重开。",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["requestId", "reminderId", "expectedVersion", "patch"],
+        "properties": {
+          "requestId": {"$ref": "#/$defs/requestId"},
+          "reminderId": {"$ref": "#/$defs/reminderId"},
+          "expectedVersion": {"$ref": "#/$defs/expectedVersion"},
+          "patch": {"$ref": "#/$defs/patch"}
+        }
+      },
+      "example": {
+        "requestId": "sample_walk_update_20261004_001",
+        "reminderId": "sample-reminder-id",
+        "expectedVersion": "opaque-version-from-read-or-own-receipt",
+        "patch": {"notes": "下雨的话改为室内拉伸。"}
+      }
+    }
+  },
+  "prohibitedFields": ["status", "completedAtMillis", "completionCycle", "schedulingDeviceId", "notificationSeq", "linkedJournalId", "journalId", "document", "assets"],
+  "localValidationResult": {
+    "status": "shape_valid",
+    "operation": "create",
+    "submitted": false,
+    "checksPending": ["authorization", "timeZoneResolution", "currentReminderVersion", "phoneApplication"]
+  },
+  "executionResult": {
+    "protocolVersion": 1,
+    "commandId": "sample_command_id",
+    "requestId": "sample_walk_20261004_001",
+    "targetReminderId": "sample-reminder-id",
+    "operation": "CREATE",
+    "status": "queued",
+    "expiresAt": 1800086400000,
+    "operationStatus": null,
+    "syncVisibility": "pending",
+    "notificationStatus": "pending",
+    "appliedAt": null,
+    "resultVersion": null,
+    "rejectionCode": null,
+    "description": "合成返回示例。queued 只表示接收；applied 才表示手机落盘；visible 只表示结果版本云端可读，不代表其他手机已收到。未应用不返回事项全文/当前冲突版本，不把 null 补为成功。"
+  },
+  "errorCodes": {
+    "INVALID_INPUT": "字段、类型、长度、日期或组合非法；不要原样重试，也不回显私人值。",
+    "PERMISSION_DENIED": "没有此动作权限；不得改用普通同步接口绕过。",
+    "REQUEST_ID_REUSED": "同一请求 ID 换内容；先查询原结果，不能覆盖。",
+    "VERSION_CONFLICT": "用户事实发生变化；不返回已有内容给只写客户端，不自动强行重试。",
+    "REMINDER_NOT_EDITABLE": "已完成、已删除或存在未解决冲突，不能恢复/覆盖。",
+    "EXPIRED": "固定命令期限已过；同请求重试不能延长。"
+  },
+  "executionPolicy": {
+    "commandTtlMs": 86400000,
+    "dateHorizonDays": 90,
+    "datePolicy": "today_through_90_days",
+    "capabilityVersion": 1,
+    "allowedActions": ["CREATE", "UPDATE"],
+    "ciphertextCacheMaxEntries": 512,
+    "serverEnforcedLimits": {"accountBurst": 5, "accountPerMinute": 20, "createsPerRolling24Hours": 50, "updatesPerRolling24Hours": 200, "updatesPerReminderPerRolling24Hours": 5, "queuedCommands": 50},
+    "retry": "官方客户端先缓存固定密文信封；同 requestId 重试复用 nonce/密文/createdAt/expiresAt，不延长。429 返回 retryAfter，客户端不自动循环重试或换新 ID；这些本地检查不替代服务端限额。",
+    "timeZoneSupport": "UTC 内建。自然日查询需要本机可用的 IANA TZif 转换表；未提供独立 Windows IANA 数据库，不伪造偏移。手机是写日期的最终权威。",
+    "coverage": "列表读取所有授权提醒分页，错误/重复 ID/循环游标失败。consistentSnapshot=false、phoneLastSyncedAt=null；抓取时刻不等于手机同步时刻。"
+  },
+  "aiUsageRules": [
+    "先读取接口说明和实际授权，只调用当前程序/服务真正声明的能力。",
+    "create/update 已接源码投递路径；真实支持仍依赖手机批准写身份与后端开关，离线 validate 不联网、不创建事项。",
+    "保存 requestId 和回执；超时/queued 查询原句柄，不重复创建。",
+    "读权限缺失不得获取已有事项/记录来补信息；写权限不包含完成、删除或正文写。",
+    "今日查询明确时区；读取云端数据不等于手机未同步内容已经包含。"
+  ]
+}

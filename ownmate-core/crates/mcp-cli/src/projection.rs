@@ -40,13 +40,48 @@ pub fn decrypt_projection(
     key_id: &str,
     key: &[u8],
 ) -> Result<Value> {
+    decrypt_projection_with_keyspace(kind, item, key_id, key, None)
+}
+
+pub fn decrypt_projection_with_keyspace(
+    kind: ReadResource,
+    item: &OpaqueJournal,
+    key_id: &str,
+    key: &[u8],
+    keyspace: Option<(&str, u64)>,
+) -> Result<Value> {
     if kind == ReadResource::Journal {
         return Ok(serde_json::to_value(decrypt_mcp_journal(
             item, key_id, key,
         )?)?);
     }
     let plain = decrypt_payload(item, key_id, key)?;
-    project(kind, &item.entry_id, &plain)
+    let mut projected = project(kind, &item.entry_id, &plain)?;
+    if kind == ReadResource::Reminder {
+        projected["expectedVersion"] = keyspace.map_or(Value::Null, |(id, generation)| {
+            json!(reminder_expected_version(
+                id,
+                generation,
+                &item.entry_id,
+                &plain
+            ))
+        });
+        projected["cloudRevision"] = json!(item.revision);
+        projected["serverUpdatedAt"] = json!(item.server_updated_at);
+    }
+    Ok(projected)
+}
+
+pub fn reminder_expected_version(
+    keyspace: &str,
+    generation: u64,
+    id: &str,
+    plain: &[u8],
+) -> String {
+    let mut hash = Sha256::new();
+    hash.update(format!("{keyspace}\n{generation}\n{id}\n").as_bytes());
+    hash.update(plain);
+    format!("rv1:{:x}", hash.finalize())
 }
 
 fn project(kind: ReadResource, id: &str, plain: &[u8]) -> Result<Value> {
@@ -241,6 +276,36 @@ fn invalid() -> McpError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn version_binds_original_bytes_keyspace_generation_and_unprojected_phone_fields() {
+        let plain = serde_json::to_vec(&reminder()).unwrap();
+        let version = reminder_expected_version("space", 3, "fixture", &plain);
+        assert_ne!(
+            version,
+            reminder_expected_version("other-space", 3, "fixture", &plain)
+        );
+        assert_ne!(
+            version,
+            reminder_expected_version("space", 4, "fixture", &plain)
+        );
+        let mut changed = reminder();
+        changed["reminder"]["schedulingDeviceId"] = json!("phone-changed-offline");
+        assert_ne!(
+            version,
+            reminder_expected_version(
+                "space",
+                3,
+                "fixture",
+                &serde_json::to_vec(&changed).unwrap()
+            )
+        );
+        let mut padded = plain.clone();
+        padded.push(b' ');
+        assert_ne!(
+            version,
+            reminder_expected_version("space", 3, "fixture", &padded)
+        );
+    }
     #[test]
     fn cycle_hash_matches_android_vector_and_legacy_fragment_does_not_guess_cycle() {
         assert_eq!(

@@ -52,6 +52,8 @@ pub struct ExchangePairingResponse {
     pub refresh_token: Option<String>,
     pub grant_expires_at: Option<u64>,
     pub key_envelope: Option<ExternalKeyEnvelope>,
+    #[serde(default)]
+    pub write_context: Option<ReminderWriteContext>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -100,6 +102,62 @@ pub struct RefreshResponse {
     pub protocol_version: u32,
     pub access_token: String,
     pub access_expires_at: u64,
+    #[serde(default)]
+    pub scopes: Option<Vec<String>>,
+    #[serde(default)]
+    pub write_context: Option<ReminderWriteContext>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReminderWriteContext {
+    #[serde(default)]
+    pub capability_version: u32,
+    pub keyspace_id: String,
+    pub keyspace_generation: u64,
+    pub target_device_id: String,
+    pub actions: Vec<String>,
+    pub policy: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReminderCommandEnvelope {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub operation: String,
+    pub grant_id: String,
+    pub keyspace_id: String,
+    pub keyspace_generation: u64,
+    pub target_device_id: String,
+    pub target_reminder_id: String,
+    pub created_at: u64,
+    pub expires_at: u64,
+    pub key_id: String,
+    pub algorithm: String,
+    pub encryption_version: u32,
+    pub nonce: String,
+    pub ciphertext: String,
+}
+
+// Decode into this projection rather than forwarding arbitrary server fields to a write-only
+// caller. A receipt carries no reminder title, notes, history or current conflicting version.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReminderCommandReceipt {
+    pub protocol_version: u32,
+    pub command_id: String,
+    pub request_id: String,
+    pub target_reminder_id: String,
+    pub operation: String,
+    pub status: String,
+    pub expires_at: u64,
+    pub operation_status: Option<String>,
+    pub result_version: Option<String>,
+    pub applied_at: Option<u64>,
+    pub rejection_code: Option<String>,
+    pub notification_status: String,
+    pub sync_visibility: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

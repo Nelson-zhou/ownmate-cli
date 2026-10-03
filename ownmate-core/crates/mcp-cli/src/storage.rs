@@ -1,3 +1,4 @@
+use crate::protocol::{ReminderCommandEnvelope, ReminderWriteContext};
 use crate::{McpError, Result};
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
@@ -18,15 +19,32 @@ pub struct ExternalSession {
     pub grant_expires_at: Option<u64>,
     pub dek_key_id: String,
     pub dek_base64: String,
+    #[serde(default)]
+    pub keyspace_id: Option<String>,
+    #[serde(default)]
+    pub keyspace_generation: Option<u64>,
     #[serde(default = "legacy_scopes")]
     pub scopes: Vec<String>,
+    #[serde(default)]
+    #[zeroize(skip)]
+    pub write_context: Option<ReminderWriteContext>,
+    #[serde(skip)]
+    #[zeroize(skip)]
+    pub temporary_commands: Vec<ReminderCommandEnvelope>,
 }
 
 impl ExternalSession {
+    pub fn keyspace(&self) -> Option<(&str, u64)> {
+        self.keyspace_id.as_deref().zip(self.keyspace_generation)
+    }
     pub fn require_scope(&self, scope: &str) -> Result<()> {
         validate_scopes(&self.scopes)?;
         if !self.scopes.iter().any(|allowed| allowed == scope) {
-            return Err(McpError::Invalid("手机未授权读取此类内容".into()));
+            return Err(McpError::Invalid(if scope == "reminders:write" {
+                "手机未授权修改提醒事项".into()
+            } else {
+                "手机未授权读取此类内容".into()
+            }));
         }
         Ok(())
     }
@@ -40,7 +58,12 @@ pub fn legacy_scopes() -> Vec<String> {
 }
 
 pub fn validate_scopes(scopes: &[String]) -> Result<()> {
-    let allowed = ["journals:read", "fragments:read", "reminders:read"];
+    let allowed = [
+        "journals:read",
+        "fragments:read",
+        "reminders:read",
+        "reminders:write",
+    ];
     let unique: std::collections::HashSet<_> = scopes.iter().collect();
     if scopes.is_empty()
         || scopes.len() > allowed.len()
@@ -49,7 +72,7 @@ pub fn validate_scopes(scopes: &[String]) -> Result<()> {
             .iter()
             .any(|scope| !allowed.contains(&scope.as_str()))
     {
-        return Err(McpError::Invalid("外部读取权限无效".into()));
+        return Err(McpError::Invalid("外部访问权限无效".into()));
     }
     Ok(())
 }

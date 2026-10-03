@@ -1256,6 +1256,10 @@ mod pairing_protocol_tests {
                         _ => panic!("expected synthetic pairing request did not arrive"),
                     }
                 };
+                // Accepted streams can inherit the listener's nonblocking mode on
+                // some platforms. Only accept polling is nonblocking; bounded HTTP
+                // reads use a blocking stream and the explicit read timeout below.
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(2)))
                     .unwrap();

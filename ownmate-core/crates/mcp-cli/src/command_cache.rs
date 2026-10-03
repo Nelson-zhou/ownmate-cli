@@ -348,9 +348,16 @@ fn verify_windows_acl(path: &Path, sid: &str) -> Result<()> {
     // All variable data enters child-only stdin, never shell/script interpolation.
     const SCRIPT: &str = r#"
 $ErrorActionPreference = 'Stop'
+$stage = 'readInput'
+try {
 $reader = [System.IO.StreamReader]::new([Console]::OpenStandardInput(), [System.Text.Encoding]::UTF8)
+$stage = 'parseInput'
 $request = $reader.ReadToEnd() | ConvertFrom-Json
-$rules = @((Get-Acl -LiteralPath $request.path).GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
+$stage = 'readAcl'
+$acl = Get-Acl -LiteralPath $request.path
+$stage = 'numericRules'
+$rules = @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
+$stage = 'assessRules'
 $allow = $false; $full = $false; $current = $false; $inheritOnly = $false
 if ($rules.Count -eq 1) {
   $rule = $rules[0]
@@ -360,6 +367,10 @@ if ($rules.Count -eq 1) {
   $inheritOnly = ($rule.PropagationFlags -band [System.Security.AccessControl.PropagationFlags]::InheritOnly) -ne 0
 }
 [Console]::Out.Write((@{entryCount=$rules.Count;allow=$allow;fullAccess=$full;currentPrincipal=$current;inheritOnly=$inheritOnly} | ConvertTo-Json -Compress))
+} catch {
+  [Console]::Out.Write((@{queryError=$true;stage=$stage;exceptionType=$_.Exception.GetType().Name;scriptLine=$_.InvocationInfo.ScriptLineNumber} | ConvertTo-Json -Compress))
+  exit 1
+}
 "#;
     let encoded = base64::engine::general_purpose::STANDARD.encode(
         SCRIPT
@@ -391,7 +402,31 @@ if ($rules.Count -eq 1) {
     let result = child.wait_with_output()?;
     if !result.status.success() {
         #[cfg(test)]
-        eprintln!("Windows ACL diagnostic: numeric SID query failed");
+        {
+            let value: serde_json::Value =
+                serde_json::from_slice(&result.stdout).unwrap_or_default();
+            let stage = match value["stage"].as_str() {
+                Some(
+                    stage @ ("readInput" | "parseInput" | "readAcl" | "numericRules"
+                    | "assessRules"),
+                ) => stage,
+                _ => "unknown",
+            };
+            let kind = match value["exceptionType"].as_str() {
+                Some(
+                    kind @ ("RuntimeException"
+                    | "MethodInvocationException"
+                    | "PSNotSupportedException"
+                    | "ParseException"
+                    | "CmdletInvocationException"),
+                ) => kind,
+                _ => "other",
+            };
+            eprintln!(
+                "Windows ACL diagnostic: numeric SID query failed; stage={stage} type={kind} line={}",
+                value["scriptLine"].as_u64().unwrap_or(0)
+            );
+        }
         return Err(invalid());
     }
     if result.stdout.len() > 4096 {
@@ -481,6 +516,69 @@ mod windows_acl_tests {
             response[field] = value;
             assert!(validate_windows_acl(&serde_json::from_value(response).unwrap()).is_err());
         }
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn existing_unsafe_directory_is_refused_without_changing_its_acl() {
+        let mut random = [0; 16];
+        OsRng.fill_bytes(&mut random);
+        let root = std::env::temp_dir().join(format!(
+            "ownmate-unsafe-acl-fixture-{:x}",
+            Sha256::digest(random)
+        ));
+        fs::create_dir(&root).unwrap();
+        // Empty synthetic fixture only: one explicit SYSTEM ACE makes the directory
+        // unsuitable for our current-user-only policy. No credential/content is written.
+        let grant = std::process::Command::new("icacls.exe")
+            .arg(&root)
+            .arg("/grant")
+            .arg("*S-1-5-18:R")
+            .output()
+            .unwrap();
+        assert!(grant.status.success());
+        let snapshot = |name: &str| {
+            let target = root.join(name);
+            let result = std::process::Command::new("icacls.exe")
+                .arg(&root)
+                .arg("/save")
+                .arg(&target)
+                .output()
+                .unwrap();
+            assert!(result.status.success());
+            fs::read(target).unwrap()
+        };
+        let before = snapshot("before.acl");
+        assert!(private_directory(&root.join("not-created")).is_err());
+        let after = snapshot("after.acl");
+        assert!(before == after, "existing unsafe ACL must remain unchanged");
+        assert!(!root.join("not-created").exists());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn new_private_directory_and_file_are_created_and_revalidated() {
+        let mut random = [0; 16];
+        OsRng.fill_bytes(&mut random);
+        let root = std::env::temp_dir().join(format!(
+            "ownmate-private-acl-fixture-{:x}",
+            Sha256::digest(random)
+        ));
+        let directory = root.join("private");
+        private_directory(&directory).unwrap();
+        let path = directory.join("synthetic-lock");
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        initialize_new_private_file(&path).unwrap();
+        private_directory(&directory).unwrap();
+        private_file(&path, &fs::metadata(&path).unwrap()).unwrap();
+        drop(file);
+        fs::remove_dir_all(&root).unwrap();
     }
 }
 

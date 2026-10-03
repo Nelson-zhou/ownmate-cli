@@ -6,11 +6,43 @@
 
 ## 安装
 
-从[官方 Releases](https://github.com/Nelson-zhou/ownmate-cli/releases)下载与你系统匹配的 CLI 压缩包及 SHA-256 校验文件。发布资产支持 Linux x64、macOS Apple Silicon、Windows x64；不需要管理员权限。解压到自己的用户目录，MCP 配置可直接使用程序的绝对路径，无须修改系统 PATH。
+请让安装助手先读取本仓 [AGENTS.md 安装契约](AGENTS.md)。你可以直接把下面这段交给 AI 或其它安装助手：
 
-Linux/macOS 用 `sha256sum -c 文件名.sha256` 或 `shasum -a 256 -c 文件名.sha256` 校验；Windows 用 `Get-FileHash 文件名.zip -Algorithm SHA256` 与校验文件对拍。校验值只能确认文件完整性，不能替代签名：本版 CLI 未签名、未公证，仍是预览发布。Linux 可信授权需要可用的 Secret Service / keyring。
+> 帮我从 https://github.com/Nelson-zhou/ownmate-cli 官方 Release 安装 OwnMate CLI，并接入我指定的 MCP Host。先读仓库 AGENTS.md，核对系统、架构、已有版本和运行依赖；Linux 要检查 libdbus，只通过本发行版官方包管理器补缺失项，已安装的不重装。列明安装位置、包事务和所需权限，不静默 sudo、不升级系统或关闭凭据保护。权限不足或环境不支持时说明具体缺口；可运行 CLI 但凭据库不可用时，保留手机明确批准的临时模式。不要读取我的现有记录来验收，也不要替我在手机批准授权。
 
-也可从公开源码构建。需要 Rust 1.89 或更新的 stable（edition 2024），Linux 构建另需 pkg-config 和 libdbus-1-dev：
+按下面五步完成：
+
+1. 核对操作系统、CPU 架构、已有 CLI 版本、目标 MCP Host 和安装目录；Linux 同时检查发行版、动态加载器及运行库。当前 Release 提供 Linux x64（GNU/glibc）、macOS Apple Silicon 和 Windows x64，下载前以该 Release 的资产为准。
+2. 从[官方 Releases](https://github.com/Nelson-zhou/ownmate-cli/releases)下载匹配的压缩包及 SHA-256 文件，核验来源、完整性和解压路径。CLI 放在用户目录即可，MCP 配置使用程序绝对路径，无须修改系统 PATH；补系统库可能另需管理员授权。
+3. 只处理检测到的缺失依赖。已安装的不重装，仅使用该发行版官方软件源与包管理器；先展示准确包名和事务，所需权限未获授权时由用户按系统流程处理。不得保存登录密码、静默提权、执行全系统升级或替换系统 glibc；如果事务要求超出缺失依赖范围的变更，停止并说明。
+4. 运行 `ownmate-mcp --version`、`help` 或 `reminders schema` 验证程序能启动，再检查原生凭据可用性。`doctor --credential-probe` 只测试隔离合成条目的保存、读回和清理，不读取旧连接；合成探测通过也不保证正式保存成功。
+5. 只配置你指定的 MCP Host，再运行 `ownmate-mcp pair --name "My computer"` 让你在手机核对风险、名称、核对码、指纹和权限。手机批准、正式凭据保存与服务器确认完成后，才能报告可信连接成功；安装 libdbus 或看到二维码均不代表授权完成。
+
+Linux/macOS 用 `sha256sum -c 文件名.sha256` 或 `shasum -a 256 -c 文件名.sha256` 校验；Windows 用 `Get-FileHash 文件名.zip -Algorithm SHA256` 与校验文件对拍。校验值只能确认文件完整性，不能替代签名：本版 CLI 未签名、未公证，仍是预览发布。
+
+### Linux：运行库与可信凭据分开检查
+
+已发布的 v0.2.1 Linux x64 ELF 动态依赖 `libdbus-1.so.3`、`libgcc_s.so.1`、`libc.so.6` 和 glibc 加载器，最高所需符号版本为 `GLIBC_2.34`。这是该资产的 ABI 要求，不是所有 Linux 发行版的支持保证；Alpine/musl 或更旧 glibc 不能只靠安装 libdbus 修复。遇到加载器、ABI 或其它缺失库，先停止预编译路线并说明缺口，可由用户选择适配的环境或源码构建，不自动升级系统。
+
+先查已安装包与库加载结果；仅在确认来源及校验值后的官方二进制上检查动态依赖，未知二进制使用 `readelf` 等不执行程序的检查方式。以下为已核实的官方包名，源码列仅在用户选择从源码构建时需要：
+
+| 发行版 | 预编译 CLI 的 libdbus 运行包 | 源码构建另需的 dbus 头文件 / pkg-config 工具 |
+| --- | --- | --- |
+| Debian / Ubuntu | `libdbus-1-3` | `libdbus-1-dev`，可提供 `pkg-config` 命令的 `pkgconf` / `pkg-config` 包 |
+| Fedora | `dbus-libs` | `dbus-devel`、`pkgconf-pkg-config` |
+| Arch Linux | `dbus` | `dbus` 同时含头文件，另需 `pkgconf` |
+
+包名依据：[Debian 运行库](https://packages.debian.org/trixie/libdbus-1-3)、[开发包](https://packages.debian.org/trixie/libdbus-1-dev)、[pkg-config 提供者](https://packages.debian.org/trixie/pkg-config)；[Ubuntu 运行库](https://packages.ubuntu.com/noble/libdbus-1-3)、[开发包](https://packages.ubuntu.com/noble/libdbus-1-dev)；[Fedora 运行库](https://packages.fedoraproject.org/pkgs/dbus/dbus-libs/)、[开发包](https://packages.fedoraproject.org/pkgs/dbus/dbus-devel/)、[pkg-config 提供者](https://packages.fedoraproject.org/pkgs/pkgconf/pkgconf-pkg-config/)；[Arch dbus 文件清单](https://archlinux.org/packages/core/x86_64/dbus/files/)、[pkgconf 文件清单](https://archlinux.org/packages/core/x86_64/pkgconf/files/)。其它发行版或发行版版本变化时，查询其官方包数据库中 `libdbus-1.so.3`、dbus 开发头文件及 `pkg-config` 的提供者，不套用别的发行版包名。
+
+例如 Debian/Ubuntu 确认运行库缺失后，先查看 `apt-get -s install libdbus-1-3` 的模拟事务；授权范围和事务都明确后才由有权限的用户执行 `apt-get install libdbus-1-3`。Fedora、Arch 同样先查询已安装状态和官方事务。不得为这一步自动执行 `apt upgrade`、`dnf upgrade` 或 `pacman -Syu`；也不在 Arch 上通过仅刷新软件包数据库制造局部升级。系统需要维护才能安装时，报告后停止，由用户另行处理。
+
+Linux 可信模式使用内核 keyutils 缓存与 Secret Service 持久保存，还需要可访问的用户 D-Bus 会话、可用的 Secret Service（例如 GNOME Keyring 或支持该接口的 KWallet）及允许 keyring 操作的内核/沙箱环境；内核缓存本身不能跨重启保存。SSH、无桌面服务和容器可能不满足这些条件，[Docker 默认 seccomp](https://docs.docker.com/engine/security/seccomp/)会阻止相关 keyring 系统调用。安装 libdbus 不等于启动了凭据服务，也不等于可信授权已完成。
+
+若仅凭据库或私有选择器不可用，CLI 预检会让本次手机配对只提供「仅本次使用」，会话限同一进程、最多三十分钟；程序不自动解锁凭据库或放宽保护。若缺运行库、加载器或兼容 ABI，CLI 连临时模式也不能启动；安装助手应报告「运行依赖未完成」，而不是声称已降级可用。权限不足时停止可信配置，明确告诉用户目前是否具备临时使用条件。
+
+### 从公开源码构建
+
+需要 Rust 1.89 或更新的 stable（edition 2024）、可用的 C 编译/链接工具，以及对应发行版的 dbus 开发头文件和 `pkg-config` 工具。预编译包用户不需要为此额外安装 Rust、开发头文件或完整构建工具链；源码构建也不使用 `sudo cargo install`。
 
 ```sh
 git clone https://github.com/Nelson-zhou/ownmate-cli.git
@@ -37,6 +69,8 @@ ownmate-mcp pair --name "My computer"
 
 - 临时授权：最多 30 分钟，仅当前 `pair` 进程有效，不落盘；通过该进程的 MCP stdio 使用。
 - 信任设备：连接凭据进入 macOS Keychain、Windows Credential Manager 或 Linux keyring，后续终端命令可用；可在 App 撤销。
+
+批准前请阅读下方[隐私与撤销](#隐私与撤销)：接收内容的软件、MCP Host、AI 服务及其插件都属于你的授权选择范围；只在你信任的电脑和软件环境中连接。
 
 ### macOS 可信授权与 SSH
 
@@ -164,6 +198,10 @@ ownmate-mcp query --from 2026-09-01 --through 2026-09-30
 分类 Resources 支持 `resources/list` 和 `resources/read`。Tools 为 `reminders_list`、`reminders_read`、`reminders_create`、`reminders_update`、`reminders_request_status`，只按实际批准的 scope 与写身份暴露，每次调用再次鉴权。临时模式可由 Host 直接启动 `ownmate-mcp pair`，并在 stderr 查看配对二维码；凭据仅留在该进程内。
 
 ## 隐私与撤销
+
+CLI 会在电脑本地解密批准范围内的内容，再交给你选择的软件。MCP Host、AI 服务、插件、聊天历史或诊断系统可能保存、复制、同步或进一步传输收到的明文；是否用于训练、保留多久、谁能访问，取决于该第三方的政策、设置和实际实现，不能一概断言一定训练或一定不训练。扫码授权之前，请确认接收方及其隐私设置，并只给本次任务所需的权限；安装助手不应为了验收而顺便读取现有记录。
+
+这里的「信任」表示由你作出的授权选择，不是 OwnMate 为设备、第三方软件或 AI 的安全性背书。多人共用、远程代管、已被入侵或带有不明插件的环境会增加泄露风险。OwnMate 可以执行自身的授权与撤销边界，无法控制第三方已经取得的副本或替第三方承诺其后续行为；用户应谨慎选择接收方并管理其权限。本风险提示不免除 OwnMate 或第三方依法应承担、或已明确承诺的责任。
 
 服务端传密文与包裹的 DEK，CLI 本地校验 AES-GCM、身份及载荷。官方投影不输出媒体原文件、响铃设备身份或 Context，但字段投影不是密码学隔离：持有 DEK 与原始密文的自定义客户端可能解析地点、天气等 Context。只授权可信软件。不会授予 MEK、普通账户登录或普通同步写权。
 

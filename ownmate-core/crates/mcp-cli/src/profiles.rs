@@ -1,6 +1,6 @@
 //! Atomic selectors contain no tokens, keys or private pairing material.
 //! A pending selector always takes precedence: it never silently loads older scopes.
-use crate::command_cache::{private_directory, private_file};
+use crate::command_cache::{initialize_new_private_file, private_directory, private_file};
 use crate::storage::{
     CredentialStore, ExternalSession, LEGACY_ACCOUNT, NativeCredentials, account_for, read_session,
     save_verified,
@@ -71,13 +71,27 @@ impl ProfileStore {
             Err(_) => return Err(profile_error()),
         }
         let mut options = OpenOptions::new();
-        options.read(true).write(true).create(true).truncate(false);
+        options
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .truncate(false);
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
             options.mode(0o600);
         }
-        let file = options.open(&path).map_err(|_| profile_error())?;
+        let file = match options.open(&path) {
+            Ok(file) => {
+                initialize_new_private_file(&path).map_err(|_| profile_error())?;
+                file
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                options.create_new(false).create(false);
+                options.open(&path).map_err(|_| profile_error())?
+            }
+            Err(_) => return Err(profile_error()),
+        };
         private_file(
             &path,
             &fs::symlink_metadata(&path).map_err(|_| profile_error())?,
@@ -144,6 +158,7 @@ impl ProfileStore {
         }
         let mut file = options.open(&temporary).map_err(|_| profile_error())?;
         let result = (|| -> Result<()> {
+            initialize_new_private_file(&temporary).map_err(|_| profile_error())?;
             file.write_all(&bytes).map_err(|_| profile_error())?;
             file.sync_all().map_err(|_| profile_error())?;
             private_file(

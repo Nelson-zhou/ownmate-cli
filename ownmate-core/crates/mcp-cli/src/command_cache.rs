@@ -95,6 +95,7 @@ impl CommandCache {
         }
         let mut file = options.open(&temporary)?;
         let result = (|| -> Result<()> {
+            initialize_new_private_file(&temporary)?;
             file.write_all(&serialized)?;
             file.flush()?;
             file.sync_all()?;
@@ -184,17 +185,12 @@ pub(crate) fn private_directory(directory: &Path) -> Result<()> {
 #[cfg(target_os = "windows")]
 pub(crate) fn private_directory(directory: &Path) -> Result<()> {
     if let Some(parent) = directory.parent() {
-        windows_acl_step(
-            fs::create_dir_all(parent).map_err(McpError::from),
-            "create parent",
-        )?;
-        windows_acl_step(protect_windows_directory(parent), "protect parent")?;
+        windows_acl_step(create_private_windows_directory(parent), "private parent")?;
     }
     windows_acl_step(
-        fs::create_dir_all(directory).map_err(McpError::from),
-        "create directory",
-    )?;
-    windows_acl_step(protect_windows_directory(directory), "protect directory")
+        create_private_windows_directory(directory),
+        "private directory",
+    )
 }
 
 #[cfg(all(not(unix), not(target_os = "windows")))]
@@ -229,6 +225,35 @@ pub(crate) fn private_file(path: &Path, metadata: &fs::Metadata) -> Result<()> {
     #[cfg(not(target_os = "windows"))]
     let _ = path;
     Ok(())
+}
+
+/// Only call immediately after create_new succeeds; never repair an existing file ACL.
+pub(crate) fn initialize_new_private_file(path: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if !metadata.is_file() || metadata.file_attributes() & 0x400 != 0 {
+            return Err(invalid());
+        }
+        let sid = windows_sid()?;
+        let reset = std::process::Command::new("icacls.exe")
+            .arg(path)
+            .arg("/reset")
+            .output()?;
+        if !reset.status.success() {
+            return Err(invalid());
+        }
+        let result = std::process::Command::new("icacls.exe")
+            .arg(path)
+            .args(["/inheritance:r", "/grant:r"])
+            .arg(format!("*{sid}:F"))
+            .output()?;
+        if !result.status.success() {
+            return Err(invalid());
+        }
+    }
+    private_file(path, &metadata)
 }
 
 #[cfg(target_os = "windows")]
@@ -294,59 +319,116 @@ fn protect_windows_directory(path: &Path) -> Result<()> {
 }
 
 #[cfg(target_os = "windows")]
-fn verify_windows_acl(path: &Path, sid: &str) -> Result<()> {
-    let parent = path.parent().ok_or_else(invalid)?;
-    let mut random = [0; 16];
-    OsRng.fill_bytes(&mut random);
-    let acl_file = parent.join(format!(".acl-{:x}", Sha256::digest(random)));
-    let result = std::process::Command::new("icacls.exe")
-        .arg(path)
-        .arg("/save")
-        .arg(&acl_file)
-        .output()?;
-    if !result.status.success() {
-        #[cfg(test)]
-        eprintln!("Windows ACL diagnostic: icacls save command failed");
-        let _ = fs::remove_file(&acl_file);
+fn create_private_windows_directory(path: &Path) -> Result<()> {
+    use std::os::windows::fs::MetadataExt;
+    let created = match fs::create_dir(path) {
+        Ok(()) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => false,
+        Err(error) => return Err(error.into()),
+    };
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_dir() || metadata.file_attributes() & 0x400 != 0 {
         return Err(invalid());
     }
-    let bytes = fs::read(&acl_file);
-    let _ = fs::remove_file(&acl_file);
-    let bytes = bytes?;
-    let content = windows_acl_step(decode_windows_acl(&bytes), "decode icacls ACL")?;
-    verify_windows_sddl(&content, sid)
+    if created {
+        // Initialize only the new directory owned by this operation. Existing unsafe
+        // directories are rejected, never reset or changed recursively.
+        protect_windows_directory(path)
+    } else {
+        verify_windows_acl(path, &windows_sid()?)
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn verify_windows_acl(path: &Path, sid: &str) -> Result<()> {
+    use base64::Engine;
+    use std::process::{Command, Stdio};
+    // Windows SDDL may print SID aliases. Ask .NET for numeric SID objects instead
+    // of comparing the descriptor's display representation or guessing RID aliases.
+    // All variable data enters child-only stdin, never shell/script interpolation.
+    const SCRIPT: &str = r#"
+$ErrorActionPreference = 'Stop'
+$reader = [System.IO.StreamReader]::new([Console]::OpenStandardInput(), [System.Text.Encoding]::UTF8)
+$request = $reader.ReadToEnd() | ConvertFrom-Json
+$rules = @((Get-Acl -LiteralPath $request.path).GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
+$allow = $false; $full = $false; $current = $false; $inheritOnly = $false
+if ($rules.Count -eq 1) {
+  $rule = $rules[0]
+  $allow = $rule.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow
+  $full = $rule.FileSystemRights -eq [System.Security.AccessControl.FileSystemRights]::FullControl
+  $current = $rule.IdentityReference.Value -ceq $request.sid
+  $inheritOnly = ($rule.PropagationFlags -band [System.Security.AccessControl.PropagationFlags]::InheritOnly) -ne 0
+}
+[Console]::Out.Write((@{entryCount=$rules.Count;allow=$allow;fullAccess=$full;currentPrincipal=$current;inheritOnly=$inheritOnly} | ConvertTo-Json -Compress))
+"#;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(
+        SCRIPT
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>(),
+    );
+    let request = serde_json::to_vec(&serde_json::json!({
+        "path": path.to_str().ok_or_else(invalid)?, "sid": sid
+    }))
+    .map_err(|_| invalid())?;
+    let mut child = Command::new("powershell.exe")
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-EncodedCommand",
+            &encoded,
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()?;
+    child
+        .stdin
+        .take()
+        .ok_or_else(invalid)?
+        .write_all(&request)?;
+    let result = child.wait_with_output()?;
+    if !result.status.success() {
+        #[cfg(test)]
+        eprintln!("Windows ACL diagnostic: numeric SID query failed");
+        return Err(invalid());
+    }
+    if result.stdout.len() > 4096 {
+        return Err(invalid());
+    }
+    let assessment: WindowsAclAssessment =
+        serde_json::from_slice(&result.stdout).map_err(|_| invalid())?;
+    validate_windows_acl(&assessment)
 }
 
 #[cfg(any(target_os = "windows", test))]
-fn verify_windows_sddl(content: &str, sid: &str) -> Result<()> {
-    let sddl = content
-        .lines()
-        .find(|line| line.starts_with("D:"))
-        .ok_or_else(invalid);
-    #[cfg(test)]
-    if sddl.is_err() {
-        eprintln!("Windows ACL diagnostic: missing DACL line");
-    }
-    let sddl = sddl?;
-    let aces: Vec<_> = sddl.split('(').skip(1).collect();
-    if aces.len() != 1 {
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct WindowsAclAssessment {
+    entry_count: usize,
+    allow: bool,
+    full_access: bool,
+    current_principal: bool,
+    inherit_only: bool,
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn validate_windows_acl(assessment: &WindowsAclAssessment) -> Result<()> {
+    if assessment.entry_count != 1
+        || !assessment.allow
+        || !assessment.full_access
+        || !assessment.current_principal
+        || assessment.inherit_only
+    {
         #[cfg(test)]
         eprintln!(
-            "Windows ACL diagnostic: expected one ACE; count={}",
-            aces.len()
-        );
-        return Err(invalid());
-    }
-    let ace = aces[0].split(')').next().ok_or_else(invalid)?;
-    let fields: Vec<_> = ace.split(';').collect();
-    if fields.len() != 6 || fields[0] != "A" || fields[2] != "FA" || fields[5] != sid {
-        #[cfg(test)]
-        eprintln!(
-            "Windows ACL diagnostic: one ACE rejected; shape={} allow={} full_access={} current_principal={}",
-            fields.len() == 6,
-            fields.first() == Some(&"A"),
-            fields.get(2) == Some(&"FA"),
-            fields.get(5) == Some(&sid)
+            "Windows ACL diagnostic: numeric ACL rejected; count={} allow={} full_access={} current_principal={} inherit_only={}",
+            assessment.entry_count,
+            assessment.allow,
+            assessment.full_access,
+            assessment.current_principal,
+            assessment.inherit_only
         );
         return Err(invalid());
     }
@@ -364,52 +446,40 @@ fn windows_acl_step<T>(result: Result<T>, stage: &str) -> Result<T> {
     result
 }
 
-#[cfg(any(target_os = "windows", test))]
-fn decode_windows_acl(bytes: &[u8]) -> Result<String> {
-    if bytes.len() > 16384 || bytes.len() & 1 != 0 {
-        return Err(invalid());
-    }
-    let words: Vec<u16> = (0..bytes.len())
-        .step_by(2)
-        .map(|offset| u16::from_le_bytes([bytes[offset], bytes[offset + 1]]))
-        .collect();
-    String::from_utf16(&words).map_err(|_| invalid())
-}
-
 fn invalid() -> McpError {
     McpError::Invalid("私有密文请求缓存无效或权限不安全".into())
 }
 
 #[cfg(test)]
-mod windows_acl_decoding_tests {
+mod windows_acl_tests {
     use super::*;
 
     #[test]
-    fn utf16_acl_preserves_lines_and_rejects_malformed_or_oversized_data() {
-        let content = "\u{feff}合成缓存\r\nD:PAI(A;OICI;FA;;;S-1-5-21-123)\r\n";
-        let bytes: Vec<u8> = content.encode_utf16().flat_map(u16::to_le_bytes).collect();
-        assert_eq!(decode_windows_acl(&bytes).unwrap(), content);
-        assert!(decode_windows_acl(&[0]).is_err());
-        assert!(decode_windows_acl(&[0, 0xd8]).is_err());
-        assert!(decode_windows_acl(&vec![0; 16386]).is_err());
+    fn numeric_acl_response_rejects_missing_wrong_type_or_extra_fields() {
+        for input in [
+            r#"{"entryCount":1}"#,
+            r#"{"entryCount":"PRIVATE_VALUE"}"#,
+            r#"{"entryCount":1,"allow":true,"fullAccess":true,"currentPrincipal":true,"inheritOnly":false,"extra":"PRIVATE_VALUE"}"#,
+        ] {
+            assert!(serde_json::from_str::<WindowsAclAssessment>(input).is_err());
+        }
     }
 
     #[test]
-    fn private_sddl_accepts_only_one_full_access_current_user_ace() {
-        let sid = "S-1-5-21-123";
-        assert!(
-            verify_windows_sddl(&format!("synthetic\r\nD:PAI(A;OICI;FA;;;{sid})\r\n"), sid).is_ok()
-        );
-        assert!(
-            verify_windows_sddl(&format!("synthetic\r\nD:AI(A;ID;FA;;;{sid})\r\n"), sid).is_ok()
-        );
-        for sddl in [
-            "D:PAI",
-            "D:PAI(A;OICI;FR;;;S-1-5-21-123)",
-            "D:PAI(A;OICI;FA;;;S-1-5-21-999)",
-            "D:PAI(A;OICI;FA;;;S-1-5-21-123)(A;OICI;FA;;;S-1-5-21-999)",
+    fn numeric_acl_accepts_only_one_effective_full_access_current_user_ace() {
+        let valid = serde_json::json!({"entryCount":1,"allow":true,"fullAccess":true,"currentPrincipal":true,"inheritOnly":false});
+        assert!(validate_windows_acl(&serde_json::from_value(valid.clone()).unwrap()).is_ok());
+        for (field, value) in [
+            ("entryCount", serde_json::json!(0)),
+            ("entryCount", serde_json::json!(2)),
+            ("allow", serde_json::json!(false)),
+            ("fullAccess", serde_json::json!(false)),
+            ("currentPrincipal", serde_json::json!(false)),
+            ("inheritOnly", serde_json::json!(true)),
         ] {
-            assert!(verify_windows_sddl(sddl, sid).is_err());
+            let mut response = valid.clone();
+            response[field] = value;
+            assert!(validate_windows_acl(&serde_json::from_value(response).unwrap()).is_err());
         }
     }
 }

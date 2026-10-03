@@ -16,7 +16,7 @@
 2. 从[官方 Releases](https://github.com/Nelson-zhou/ownmate-cli/releases)下载匹配的压缩包及 SHA-256 文件，核验来源、完整性和解压路径。CLI 放在用户目录即可，MCP 配置使用程序绝对路径，无须修改系统 PATH；补系统库可能另需管理员授权。
 3. 只处理检测到的缺失依赖。已安装的不重装，仅使用该发行版官方软件源与包管理器；先展示准确包名和事务，所需权限未获授权时由用户按系统流程处理。不得保存登录密码、静默提权、执行全系统升级或替换系统 glibc；如果事务要求超出缺失依赖范围的变更，停止并说明。
 4. 运行 `ownmate-mcp --version`、`help` 或 `reminders schema` 验证程序能启动，再检查原生凭据可用性。`doctor --credential-probe` 只测试隔离合成条目的保存、读回和清理，不读取旧连接；合成探测通过也不保证正式保存成功。
-5. 只配置你指定的 MCP Host，再运行 `ownmate-mcp pair --name "My computer"` 让你在手机核对风险、名称、核对码、指纹和权限。手机批准、正式凭据保存与服务器确认完成后，才能报告可信连接成功；安装 libdbus 或看到二维码均不代表授权完成。
+5. 安装助手先读 `pair --help`：可信安装使用 `pair --setup`，完成后再接入选定 Host；临时使用由 Host 启动 `pair --serve` 并保持同一进程。手机核对风险、名称、核对码、指纹及权限后由你批准，保存读回与服务器确认完成前不报告连接成功。
 
 Linux/macOS 用 `sha256sum -c 文件名.sha256` 或 `shasum -a 256 -c 文件名.sha256` 校验；Windows 用 `Get-FileHash 文件名.zip -Algorithm SHA256` 与校验文件对拍。校验值只能确认文件完整性，不能替代签名：本版 CLI 未签名、未公证，仍是预览发布。
 
@@ -59,7 +59,32 @@ ownmate-mcp pair --name "My computer"
 
 配对二维码必须将本次 CLI 输出中的二维码区域无损截图或本地转换为 PNG 图片附件展示，保留四周留白和正方形比例；不要粘贴字符二维码，不用生成式 AI 重绘或在线网站转换，无法展示图片时如实说明。
 
-当前 `pair` 的二维码是 stderr 中的 Unicode 字符输出，没有 PNG/SVG 导出参数；图片交付由安装助手在本地完成，继续使用同一配对进程。
+v0.2.2 新增 `--qr-output PATH.svg`，确定性生成正方形 SVG 并保留静区；终端仍提供字符码。助手优先将 SVG 在本地等比转为 PNG 图片附件，不使用线上转换网站或生成式 AI 重绘。输出目录须已存在，首张码拒绝覆盖已有文件；同一活流程只原子更新它自己创建且内容未被修改的 SVG。换码后重新转换并展示当前代次，不复用旧 PNG。程序没有 PNG 输出参数。
+
+### 帮助、状态与换码
+
+```sh
+ownmate-mcp --help
+ownmate-mcp pair --help
+ownmate-mcp reminders create --help
+ownmate-mcp status --json
+ownmate-mcp pair --setup --name "My computer" --qr-output ./ownmate-pair.svg
+```
+
+所有子命令支持 `--help` / `-h`，也可用 `help pair`。状态是子命令，不是 `-status`。可信 `--setup` 只提供可信方式，完成保存、读回、ready 和活动连接登记后退出；凭据环境不支持时在显示码前明确拒绝。默认 `pair` 与 `pair --serve` 都在同一进程提供 MCP；temporary 到期或 stdio 结束后不能由另一个命令复用。
+
+`pair` 输出本次 `session` 标识。需要查询或主动更新还未批准的二维码时，另一个终端使用：
+
+```sh
+ownmate-mcp pair status --session SESSION_ID --json
+ownmate-mcp pair replace --session SESSION_ID --json
+```
+
+`replace` 返回 `requested` 只表示请求已交给原进程，不代表旧码已经失效。继续查 `pair status`；确认 `generation` 前进且 `state=waiting_phone` 后，再展示 `qrOutput` 指向的最新图片。原进程先确认取消旧 pending，再创建新码；取消回复丢失就用原证明重试，不先显示第二码。手机批准先完成时继续原授权，不换码、不撤销。新码创建失败会明确报告，不能称为换码成功。
+
+单码五分钟；未批准到期后原进程自动换码，每流程最多三张码、十五分钟等待。这些上限是 OwnMate 的取舍；已批准授权的原十分钟完成期限和临时原三十分钟期限不延长。网络 timeout/reset、502/503/504 或容得下的429只有限重试，证书、协议或永久拒绝不盲试；轮询不是交换回调。
+
+`status --json` 只读本机非敏感选择器及 owner 锁，不读凭据库、记录或网络，也不证明远端授权当前仍有效。根据实际 `reason` / `nextAction` 处理；不要看到选择器就宣称已连接。`PAIR_OWNER_LOST` 表示握手持有者退出：尚未保存已验证原生候选就需新开 `pair`，原私钥/secret不能由后台化或普通文件恢复，旧码按原期限失效。已验证候选登记后的 ready 重启恢复仍走原协议。
 
 在 App「设置 → 扫一扫」扫码，核对名称、六位码和公钥指纹，由你在手机确认。三项权限独立选择，默认不勾选：
 

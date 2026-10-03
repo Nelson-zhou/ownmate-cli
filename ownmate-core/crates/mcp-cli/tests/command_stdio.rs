@@ -53,7 +53,7 @@ fn version_schema_and_local_validation_emit_json_without_reading_credentials() {
     assert!(output.stderr.is_empty());
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
-        "ownmate-mcp 0.2.2\n"
+        format!("ownmate-mcp {}\n", env!("CARGO_PKG_VERSION"))
     );
     let output = cli()
         .args(["reminders", "schema"])
@@ -85,6 +85,7 @@ fn version_schema_and_local_validation_emit_json_without_reading_credentials() {
 #[test]
 fn every_subcommand_help_is_offline_nonblocking_and_does_not_consume_mcp_stdin() {
     for args in [
+        vec!["guide", "--help"],
         vec!["pair", "--help"],
         vec!["pair", "--setup", "--help"],
         vec!["pair", "status", "--help"],
@@ -125,6 +126,76 @@ fn every_subcommand_help_is_offline_nonblocking_and_does_not_consume_mcp_stdin()
         assert!(text.contains("ownmate-mcp"));
         assert!(!text.contains("PRIVATE_SYNTHETIC_MCP_INPUT"));
     }
+}
+
+#[test]
+fn agent_guide_is_versioned_offline_and_distinguishes_install_pair_and_host_evidence() {
+    let isolated = std::env::temp_dir().join(format!(
+        "ownmate-guide-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let output = cli()
+        .args(["guide", "--json"])
+        .env("XDG_STATE_HOME", &isolated)
+        .env("LOCALAPPDATA", &isolated)
+        .env("HTTPS_PROXY", "http://127.0.0.1:1")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    assert!(!isolated.exists());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["schemaVersion"], 1);
+    assert_eq!(value["cliVersion"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(value["sideEffects"], serde_json::json!([]));
+    assert_eq!(
+        value["trusted"]["pairArgs"],
+        serde_json::json!(["pair", "--setup"])
+    );
+    assert_eq!(value["trusted"]["hostArgs"], serde_json::json!(["mcp"]));
+    assert_eq!(
+        value["temporary"]["hostArgs"],
+        serde_json::json!(["pair", "--serve"])
+    );
+    assert_eq!(
+        value["completionEvidence"]["host_ready"]["methods"],
+        serde_json::json!(["initialize", "ping"])
+    );
+    assert_eq!(value["localStatus"]["provesCurrentServerActive"], false);
+    assert_eq!(value["qr"]["requires"]["ownerAlive"], true);
+    assert_eq!(value["qr"]["requires"]["state"], "waiting_phone");
+    assert_eq!(value["timeouts"]["nativeCredentialCallBounded"], false);
+    for args in [["help", "--json"], ["--help", "--json"], ["-h", "--json"]] {
+        let output = cli().args(args).stdin(Stdio::null()).output().unwrap();
+        assert!(output.status.success());
+        assert!(output.stderr.is_empty());
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(),
+            value
+        );
+    }
+    let output = cli().arg("guide").stdin(Stdio::null()).output().unwrap();
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("guide --json")
+    );
+    let output = cli()
+        .args(["guide", "--unknown", "--json"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(error["reason"], "INVALID_COMMAND_OR_PAIRING_STATE");
 }
 
 #[test]

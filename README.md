@@ -8,14 +8,24 @@
 
 请让安装助手先读取本仓 [AGENTS.md 安装契约](AGENTS.md)。你可以直接把下面这段交给 AI 或其它安装助手：
 
-> 帮我从 https://github.com/Nelson-zhou/ownmate-cli 官方 Release 安装 OwnMate CLI，并接入我指定的 MCP Host。先读仓库 AGENTS.md，核对系统、架构、已有版本和运行依赖；Linux 要检查 libdbus，只通过本发行版官方包管理器补缺失项，已安装的不重装。列明安装位置、包事务和所需权限，不静默 sudo、不升级系统或关闭凭据保护。权限不足或环境不支持时说明具体缺口；可运行 CLI 但凭据库不可用时，保留手机明确批准的临时模式。不要读取我的现有记录来验收，也不要替我在手机批准授权。
+> 从 https://github.com/Nelson-zhou/ownmate-cli 官方 Release 安装 OwnMate CLI，按 AGENTS.md 接入我指定的 MCP Host；扫码由我确认，不读取记录来验收。
+
+安装助手：先用实际程序的 `--version` / `--help` 确认能力。支持时读取 `guide --json`（或根命令 `help --json`）获取随程序版本提供的离线流程和证据要求；旧版不支持就按其帮助报告缺口，不自己编配对脚本补功能。指引不是当前连接状态。
+
+| 可报告的阶段 | 必须有的证据 |
+| --- | --- |
+| 程序已安装 | 官方资产校验通过，目标绝对路径的程序版本匹配 |
+| 本次配对已确认 | 可信安装的 `pair --setup` 成功退出；或官方 `pair --serve` 已确认 ready，临时方式还须保持同一进程/stdio |
+| 指定 Host 已接入 | 在实际 Host 账号和环境下，成功完成 `initialize`、`ping` 往返；只验传输，不代表云端授权当前仍有效 |
+
+逐段报告，未验证的写「待验收」。手机批准、生成二维码、写了 Host 配置、进程/PID 存在以及本地 `configured` 都不能替代这些证据。直接运行官方 CLI；不自造握手、状态文件或“交换回调”，未经要求不安装 systemd/launchd 守护服务。任务执行器可保持同一官方进程，但不因此自动成为已接入的 MCP Host。
 
 按下面五步完成：
 
-1. 核对操作系统、CPU 架构、已有 CLI 版本、目标 MCP Host 和安装目录；Linux 同时检查发行版、动态加载器及运行库。当前 Release 提供 Linux x64（GNU/glibc）、macOS Apple Silicon 和 Windows x64，下载前以该 Release 的资产为准。
+1. 核对操作系统、CPU 架构、已有 CLI 版本、目标 MCP Host 和安装目录；同时核对实际 Host 的执行账号、组、HOME/用户配置目录和会话环境，而不是只核对安装助手所在的 SSH/root 会话。Linux 另查发行版、动态加载器及运行库。当前 Release 提供 Linux x64（GNU/glibc）、macOS Apple Silicon 和 Windows x64，下载前以该 Release 的资产为准。
 2. 从[官方 Releases](https://github.com/Nelson-zhou/ownmate-cli/releases)下载匹配的压缩包及 SHA-256 文件，核验来源、完整性和解压路径。CLI 放在用户目录即可，MCP 配置使用程序绝对路径，无须修改系统 PATH；补系统库可能另需管理员授权。
 3. 只处理检测到的缺失依赖。已安装的不重装，仅使用该发行版官方软件源与包管理器；先展示准确包名和事务，所需权限未获授权时由用户按系统流程处理。不得保存登录密码、静默提权、执行全系统升级或替换系统 glibc；如果事务要求超出缺失依赖范围的变更，停止并说明。
-4. 运行 `ownmate-mcp --version`、`help` 或 `reminders schema` 验证程序能启动，再检查原生凭据可用性。`doctor --credential-probe` 只测试隔离合成条目的保存、读回和清理，不读取旧连接；合成探测通过也不保证正式保存成功。
+4. 运行 `ownmate-mcp --version`、`help` 或 `reminders schema` 验证程序能启动。`pair` 已自动执行原生凭据合成预检，不常规重复跑 `doctor --credential-probe`；该命令用于明确诊断，只测试隔离条目的保存、读回和清理，不读取旧连接，通过也不保证正式保存成功。
 5. 安装助手先读 `pair --help`：可信安装使用 `pair --setup`，完成后再接入选定 Host；临时使用由 Host 启动 `pair --serve` 并保持同一进程。手机核对风险、名称、核对码、指纹及权限后由你批准，保存读回与服务器确认完成前不报告连接成功。
 
 Linux/macOS 用 `sha256sum -c 文件名.sha256` 或 `shasum -a 256 -c 文件名.sha256` 校验；Windows 用 `Get-FileHash 文件名.zip -Algorithm SHA256` 与校验文件对拍。校验值只能确认文件完整性，不能替代签名：本版 CLI 未签名、未公证，仍是预览发布。
@@ -38,7 +48,7 @@ Linux/macOS 用 `sha256sum -c 文件名.sha256` 或 `shasum -a 256 -c 文件名.
 
 Linux 可信模式使用内核 keyutils 缓存与 Secret Service 持久保存，还需要可访问的用户 D-Bus 会话、可用的 Secret Service（例如 GNOME Keyring 或支持该接口的 KWallet）及允许 keyring 操作的内核/沙箱环境；内核缓存本身不能跨重启保存。SSH、无桌面服务和容器可能不满足这些条件，[Docker 默认 seccomp](https://docs.docker.com/engine/security/seccomp/)会阻止相关 keyring 系统调用。安装 libdbus 不等于启动了凭据服务，也不等于可信授权已完成。
 
-若仅凭据库或私有选择器不可用，CLI 预检会让本次手机配对只提供「仅本次使用」，会话限同一进程、最多三十分钟；程序不自动解锁凭据库或放宽保护。若缺运行库、加载器或兼容 ABI，CLI 连临时模式也不能启动；安装助手应报告「运行依赖未完成」，而不是声称已降级可用。权限不足时停止可信配置，明确告诉用户目前是否具备临时使用条件。
+若仅凭据库或私有选择器不可用，默认 `pair` / `pair --serve` 的预检会让本次手机配对只提供「仅本次使用」，会话限同一进程、最多三十分钟；`pair --setup` 则在二维码前失败，本次设置未完成，不自动降级。用户选择临时使用后才由实际 Host 启动 `pair --serve`。程序不自动解锁凭据库或放宽保护。若缺运行库、加载器或兼容 ABI，临时模式也不能启动；安装助手应报告「运行依赖未完成」。权限不足时停止可信配置，说明缺口，不替换账号/组或伪造 HOME 去借别人的凭据。
 
 ### 从公开源码构建
 
@@ -50,10 +60,9 @@ cd ownmate-cli
 cargo install --locked --path ownmate-core/crates/mcp-cli
 ownmate-mcp --version
 ownmate-mcp help
-ownmate-mcp pair --name "My computer"
 ```
 
-默认 API 为 `https://api.ownmate.space`。源码支持和 CI 通过不代表手机、生产 API 与全部权限组合已完成验收；提醒写入还需要服务端开关及支持该能力的 App。
+此处只安装，不启动配对服务。下一步按下方可信 `--setup` 或 Host 临时 `--serve` 路线操作。默认 API 为 `https://api.ownmate.space`。源码支持和 CI 通过不代表手机、生产 API 与全部权限组合已完成验收；提醒写入还需要服务端开关及支持该能力的 App。
 
 ## 手机授权
 
@@ -65,13 +74,14 @@ v0.2.2 新增 `--qr-output PATH.svg`，确定性生成正方形 SVG 并保留静
 
 ```sh
 ownmate-mcp --help
+ownmate-mcp guide --json
 ownmate-mcp pair --help
 ownmate-mcp reminders create --help
 ownmate-mcp status --json
 ownmate-mcp pair --setup --name "My computer" --qr-output ./ownmate-pair.svg
 ```
 
-所有子命令支持 `--help` / `-h`，也可用 `help pair`。状态是子命令，不是 `-status`。可信 `--setup` 只提供可信方式，完成保存、读回、ready 和活动连接登记后退出；凭据环境不支持时在显示码前明确拒绝。默认 `pair` 与 `pair --serve` 都在同一进程提供 MCP；temporary 到期或 stdio 结束后不能由另一个命令复用。
+所有子命令支持 `--help` / `-h`，也可用 `help pair`；`guide` / 根命令 `help --json` 输出同一安装指引。状态是子命令，不是 `-status`。可信 `--setup` 只提供可信方式，完成保存、读回、ready 和活动连接登记后退出；凭据环境不支持时在显示码前明确拒绝。默认 `pair` 与 `pair --serve` 都在同一进程提供 MCP；temporary 到期或 stdio 结束后不能由另一个命令复用。
 
 `pair` 输出本次 `session` 标识。需要查询或主动更新还未批准的二维码时，另一个终端使用：
 
@@ -80,11 +90,13 @@ ownmate-mcp pair status --session SESSION_ID --json
 ownmate-mcp pair replace --session SESSION_ID --json
 ```
 
-`replace` 返回 `requested` 只表示请求已交给原进程，不代表旧码已经失效。继续查 `pair status`；确认 `generation` 前进且 `state=waiting_phone` 后，再展示 `qrOutput` 指向的最新图片。原进程先确认取消旧 pending，再创建新码；取消回复丢失就用原证明重试，不先显示第二码。手机批准先完成时继续原授权，不换码、不撤销。新码创建失败会明确报告，不能称为换码成功。
+`replace` 返回 `requested` 只表示请求已交给原进程，不代表旧码已经失效。继续查本次 `pair status`；确认相同 session、当前 generation、`ownerAlive=true`、`state=waiting_phone` 且 `expiresAt` 未过期，再转换 `qrOutput`。转换后再次核对代次，用含 session/代次的独立 PNG 文件名交付，避免图片附件缓存旧码。控制元数据不可用时只认当前活官方 pair 进程输出，临时方式仍须由 Host 持有；说明缺少跨进程证据，不自造状态。原进程先确认取消旧 pending，再创建新码；取消回复丢失就用原证明重试，不先显示第二码。手机批准先完成时继续原授权，不换码、不撤销。新码创建失败会明确报告，不能称为换码成功。
 
 单码五分钟；未批准到期后原进程自动换码，每流程最多三张码、十五分钟等待。这些上限是 OwnMate 的取舍；已批准授权的原十分钟完成期限和临时原三十分钟期限不延长。网络 timeout/reset、502/503/504 或容得下的429只有限重试，证书、协议或永久拒绝不盲试；轮询不是交换回调。
 
 `status --json` 只读本机非敏感选择器及 owner 锁，不读凭据库、记录或网络，也不证明远端授权当前仍有效。根据实际 `reason` / `nextAction` 处理；不要看到选择器就宣称已连接。`PAIR_OWNER_LOST` 表示握手持有者退出：尚未保存已验证原生候选就需新开 `pair`，原私钥/secret不能由后台化或普通文件恢复，旧码按原期限失效。已验证候选登记后的 ready 重启恢复仍走原协议。
+
+`setup_complete` 是当次已完成的历史记录；`serving` 是 ready 后准备提供 stdio，不证明 Host 已初始化。`serverActiveConfirmed=false` 表示未在线检查，不等于已被撤销。失败、owner 丢失、过期后不能继续显示自造的 `waiting_approval` 或让用户重扫同一旧图。工具超时先检查原 session 和进程，不自动并行重开。尚无二维码或阶段进展达一分钟时，先报告真实停滞并检查一次；不是仍在下载，也不应替用户无限重试。原生凭据调用可能等待系统交互，目前没有 CLI 级单次超时保证；不要自动强杀正在保存的进程，也不要把五/十五分钟扫码限额当作凭据调用超时。
 
 在 App「设置 → 扫一扫」扫码，核对名称、六位码和公钥指纹，由你在手机确认。三项权限独立选择，默认不勾选：
 
@@ -218,13 +230,15 @@ ownmate-mcp query --from 2026-09-01 --through 2026-09-30
 
 ## MCP Host
 
-可信授权后配置 stdio；未加入 PATH 时把 `command` 换成程序绝对路径：
+可信授权后配置 stdio；将占位 `command` 换成已验证程序的绝对路径，并保留 Host 的其它 Server：
 
 ```json
-{"mcpServers":{"ownmate":{"command":"ownmate-mcp","args":["mcp"]}}}
+{"mcpServers":{"ownmate":{"command":"/absolute/path/to/ownmate-mcp","args":["mcp"]}}}
 ```
 
-分类 Resources 支持 `resources/list` 和 `resources/read`。Tools 为 `reminders_list`、`reminders_read`、`reminders_create`、`reminders_update`、`reminders_request_status`，只按实际批准的 scope 与写身份暴露，每次调用再次鉴权。临时模式可由 Host 直接启动 `ownmate-mcp pair`，并在 stderr 查看配对二维码；凭据仅留在该进程内。
+Windows 绝对路径在 JSON 中转义反斜杠，或使用 Host 支持的正斜杠。Host 验收只做 `initialize` 与 `ping`，不跑 `resources/list` / `resources/read` 或真实提醒写入；载入可信凭据或继续待完成 ready 不属于完全离线检查，没有 Host 往返证据就报告待验收。
+
+分类 Resources 支持 `resources/list` 和 `resources/read`。Tools 为 `reminders_list`、`reminders_read`、`reminders_create`、`reminders_update`、`reminders_request_status`，只按实际批准的 scope 与写身份暴露，每次调用再次鉴权。临时方式将 Host args 设为 `["pair", "--serve"]`，从 stderr 查看当前二维码，通过同一 Host 的 stdio 使用；凭据仅留在该进程内，不能由安装助手另起命令复用。
 
 ## 隐私与撤销
 

@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "kind": "installation_guide_not_connection_status",
+  "sideEffects": [],
+  "docs": {
+    "readme": "https://github.com/Nelson-zhou/ownmate-cli/blob/main/README.md",
+    "agentContract": "https://github.com/Nelson-zhou/ownmate-cli/blob/main/AGENTS.md",
+    "releases": "https://github.com/Nelson-zhou/ownmate-cli/releases"
+  },
+  "preflight": {
+    "offlineArgs": [["--version"], ["--help"], ["status", "--json"]],
+    "check": ["official_release_asset_and_sha256", "os_arch_loader_and_missing_runtime_libraries", "selected_host_configuration_and_absolute_executable_path", "actual_host_user_groups_home_and_session_environment"],
+    "credentialProbe": "pair already performs a synthetic probe; do not routinely repeat doctor or inspect real credentials",
+    "olderCli": "read that binary's --help; if guide/setup/status is unsupported report the version gap, do not invent replacement commands"
+  },
+  "trusted": {
+    "pairArgs": ["pair", "--setup"],
+    "hostArgs": ["mcp"],
+    "setupFailure": "this setup is not confirmed complete; existing grants may remain and current remote state is unknown; no automatic temporary downgrade",
+    "credentialStorage": "native_os_store_only"
+  },
+  "temporary": {
+    "hostArgs": ["pair", "--serve"],
+    "requires": ["explicit_phone_temporary_approval", "same_host_owned_process_and_open_stdio"],
+    "maximumMinutes": 30,
+    "reusableByAnotherCommand": false
+  },
+  "completionEvidence": {
+    "installed": ["official_asset_checksum_verified", "installed_absolute_binary_version_matches"],
+    "paired_trusted": ["this_run_completed_native_save_readback_ready_ack_and_selector_activation", "pair_setup_exited_0_or_official_pair_serve_reported_trusted_completion"],
+    "paired_temporary": ["this_pair_serve_reported_ready_confirmed", "same_process_and_stdio_remain_alive"],
+    "host_ready": {
+      "methods": ["initialize", "ping"],
+      "requires": "successful matching responses from the selected Host using the intended account and executable",
+      "proves": "MCP transport handshake only, not current cloud grant validity",
+      "contentReadRequired": false
+    }
+  },
+  "localStatus": {
+    "args": ["status", "--json"],
+    "pairArgsTemplate": ["pair", "status", "--session", "RUN_ID_FROM_THIS_PROCESS", "--json"],
+    "provesCurrentServerActive": false,
+    "serverActiveConfirmedFalseMeans": "not checked, not proof of revocation",
+    "historicalSetupComplete": "past completion only; not current host initialization or cloud validity",
+    "serving": "ready was acknowledged before entering stdio; not proof the Host initialized",
+    "failureReasons": ["PAIR_OWNER_LOST", "PAIRING_NOT_COMPLETED", "PAIR_WAIT_BUDGET_EXPIRED"],
+    "failureAction": "stop delivering that QR; report the reason and actual process result, never keep a private waiting_approval flag"
+  },
+  "qr": {
+    "outputArgsTemplate": ["--qr-output", "NEW_PRIVATE_EXISTING_DIRECTORY/NEW_FILE.svg"],
+    "requires": {"sameSession": true, "sameGeneration": true, "ownerAlive": true, "state": "waiting_phone", "expiresAtInFuture": true},
+    "delivery": "local lossless PNG conversion, square with quiet zone; recheck generation after conversion before attaching",
+    "controlUnavailable": "use only the current live official pair process output; temporary use must remain Host-owned; report absent cross-process evidence, never fabricate status",
+    "replaceRequested": "queued only; deliver a new image only after the owner's new generation and waiting_phone; if phone approval wins, finish the original generation instead of waiting for a replacement",
+    "imageName": "unique session-generation filename; never reuse an old PNG or a cached attachment"
+  },
+  "timeouts": {
+    "nativeCredentialCallBounded": false,
+    "noProgressCheckAfterSeconds": 60,
+    "noProgressAction": "if no QR or stage progress, inspect the same session and process once; report the stall, do not automatically kill a saving process or start parallel pairings",
+    "toolTimeout": "inspect the original owner first; a tool timeout alone does not establish owner exit or approval failure",
+    "phoneWaiting": "user waiting is not install work; show actual state and expiry, do not promise seconds until completion"
+  },
+  "boundaries": [
+    "direct official CLI, not a custom handshake wrapper or daemon; a task runner may keep that same official process alive without replacing its state",
+    "no new systemd/launchd/supervisor service unless explicitly requested",
+    "no root or group/HOME substitution to borrow another user's credentials, no unlock/ACL relaxation or ordinary-file secrets",
+    "no content reads or real reminder writes for installation validation",
+    "only the user chooses phone scopes and trust mode; installation does not approve them",
+    "report installed, paired and host_ready separately; unverified stages remain unverified, terminal failure/expiry stays failed/expired rather than waiting"
+  ]
+}

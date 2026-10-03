@@ -38,6 +38,7 @@ fn run() -> Result<()> {
     }
     let mut args = values.into_iter();
     match args.next().as_deref() {
+        Some("guide") => agent_guide(args.collect()),
         Some("reminders") => reminder_interface_command(args.collect()),
         Some("doctor") => {
             if args.collect::<Vec<_>>() != ["--credential-probe"] {
@@ -181,6 +182,22 @@ fn run() -> Result<()> {
         }
         Some(other) => Err(McpError::Invalid(format!("未知命令: {other}"))),
     }
+}
+
+fn agent_guide(args: Vec<String>) -> Result<()> {
+    if !args.is_empty() && args != ["--json"] {
+        return Err(McpError::Invalid("guide 仅接受 --json".into()));
+    }
+    if args.is_empty() {
+        eprintln!(
+            "OwnMate 安装与配对指引：ownmate-mcp guide --json（也可 help --json）\n1. 校验官方程序，检查 --version；以实际 MCP Host 的账号、HOME 和会话环境操作。\n2. 可信安装运行 pair --setup；临时使用由 Host 运行 pair --serve，保持同一进程/stdin。\n3. 用本次 pair status --session RUN_ID --json 核对 owner 与代次，再展示最新二维码图片。\n4. 配对只认 CLI 的完成证据；Host 另验 initialize/ping，不读取记录验收。\n失败/owner 丢失/过期不能继续说等待扫码；不自造配对守护、状态文件或成功回调。\n本命令完全离线，不检查当前连接；原生凭据调用仍可能等待系统交互，无 CLI 级超时保证。"
+        );
+    } else {
+        let mut guide: Value = serde_json::from_str(include_str!("agent-guide-v1.json"))?;
+        guide["cliVersion"] = Value::String(env!("CARGO_PKG_VERSION").into());
+        println!("{}", serde_json::to_string_pretty(&guide)?);
+    }
+    Ok(())
 }
 
 fn reminder_interface_command(args: Vec<String>) -> Result<()> {
@@ -972,6 +989,13 @@ fn error_action(error: &McpError) -> (&str, &str) {
 }
 
 fn command_help(args: &[String]) -> Result<()> {
+    if args.iter().any(|v| v == "--json")
+        && args
+            .iter()
+            .all(|v| matches!(v.as_str(), "help" | "--help" | "-h" | "--json"))
+    {
+        return agent_guide(vec!["--json".into()]);
+    }
     let values: Vec<&str> = args
         .iter()
         .map(String::as_str)
@@ -985,6 +1009,9 @@ fn command_help(args: &[String]) -> Result<()> {
     let path = &values[..length];
     match path {
         [] => print_help(),
+        ["guide"] => eprintln!(
+            "ownmate-mcp guide [--json]\n离线安装/配对指引，说明官方操作路径、命令副作用和完成证据；不读状态、凭据、stdin，不联网或写文件。help --json 输出同一指引。"
+        ),
         ["pair"] => eprintln!(
             "ownmate-mcp pair [--setup | --serve] [--name NAME] [--base-url HTTPS_URL] [--qr-output FILE.svg]\n默认 --serve：手机选择可用方式，ready 后提供同进程 MCP；stdin EOF 即结束，临时不可跨进程。\n--setup：只提供 trusted，原生保存/读回和 ready/选择器完成后退出，不需要 MCP stdin。\n二维码每张五分钟；同流程最多三张/十五分钟等待，换码先确认旧 pending 取消或过期。\n--qr-output：确定性 SVG，拒覆盖已有文件/链接；本地转 PNG 并展示最新图片附件。\nowner 私钥/secret 不落普通文件，不自动解锁系统凭据库。\nownmate-mcp pair status|replace --session RUN_ID [--json]"
         ),
@@ -1053,6 +1080,7 @@ fn command_help(args: &[String]) -> Result<()> {
 
 fn print_help() {
     eprintln!("OwnMate CLI/MCP（按手机明确授权）");
+    eprintln!("  ownmate-mcp guide --json          离线安装指引与完成证据（help --json 同入口）");
     eprintln!(
         "  ownmate-mcp pair [--setup | --serve] [--name NAME] [--base-url URL] [--qr-output FILE.svg]"
     );

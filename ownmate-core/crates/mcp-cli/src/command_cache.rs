@@ -342,7 +342,7 @@ fn create_private_windows_directory(path: &Path) -> Result<()> {
 #[cfg(target_os = "windows")]
 fn verify_windows_acl(path: &Path, sid: &str) -> Result<()> {
     use base64::Engine;
-    use std::process::{Command, Stdio};
+    use std::process::Command;
     // Windows SDDL may print SID aliases. Ask .NET for numeric SID objects instead
     // of comparing the descriptor's display representation or guessing RID aliases.
     // All variable data enters child-only stdin, never shell/script interpolation.
@@ -382,18 +382,9 @@ if ($rules.Count -eq 1) {
         "path": path.to_str().ok_or_else(invalid)?, "sid": sid
     }))
     .map_err(|_| invalid())?;
-    let mut child = Command::new("powershell.exe")
-        .args([
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-EncodedCommand",
-            &encoded,
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()?;
+    let mut command = Command::new("powershell.exe");
+    configure_windows_powershell(&mut command, &encoded);
+    let mut child = command.spawn()?;
     child
         .stdin
         .take()
@@ -405,23 +396,29 @@ if ($rules.Count -eq 1) {
         {
             let value: serde_json::Value =
                 serde_json::from_slice(&result.stdout).unwrap_or_default();
-            let stage = match value["stage"].as_str() {
-                Some(
-                    stage @ ("readInput" | "parseInput" | "readAcl" | "numericRules"
-                    | "assessRules"),
-                ) => stage,
-                _ => "unknown",
-            };
-            let kind = match value["exceptionType"].as_str() {
-                Some(
-                    kind @ ("RuntimeException"
-                    | "MethodInvocationException"
-                    | "PSNotSupportedException"
-                    | "ParseException"
-                    | "CmdletInvocationException"),
-                ) => kind,
-                _ => "other",
-            };
+            let stage = value["stage"]
+                .as_str()
+                .filter(|value| {
+                    matches!(
+                        *value,
+                        "readInput" | "parseInput" | "readAcl" | "numericRules" | "assessRules"
+                    )
+                })
+                .unwrap_or("unknown");
+            let kind = value["exceptionType"]
+                .as_str()
+                .filter(|value| {
+                    matches!(
+                        *value,
+                        "RuntimeException"
+                            | "MethodInvocationException"
+                            | "PSNotSupportedException"
+                            | "ParseException"
+                            | "CmdletInvocationException"
+                            | "CommandNotFoundException"
+                    )
+                })
+                .unwrap_or("other");
             eprintln!(
                 "Windows ACL diagnostic: numeric SID query failed; stage={stage} type={kind} line={}",
                 value["scriptLine"].as_u64().unwrap_or(0)
@@ -435,6 +432,25 @@ if ($rules.Count -eq 1) {
     let assessment: WindowsAclAssessment =
         serde_json::from_slice(&result.stdout).map_err(|_| invalid())?;
     validate_windows_acl(&assessment)
+}
+
+#[cfg(target_os = "windows")]
+fn configure_windows_powershell(command: &mut std::process::Command, encoded: &str) {
+    use std::process::Stdio;
+    command
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-EncodedCommand",
+            encoded,
+        ])
+        // PS7 -> cargo/Rust -> Windows PS5 inherits incompatible module paths.
+        // Remove only this child's value so PS5 reconstructs its standard paths.
+        .env_remove("PSModulePath")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
 }
 
 #[cfg(any(target_os = "windows", test))]
@@ -579,6 +595,39 @@ mod windows_acl_tests {
         private_file(&path, &fs::metadata(&path).unwrap()).unwrap();
         drop(file);
         fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn child_powershell_rebuilds_modules_without_mutating_the_parent_environment() {
+        use base64::Engine;
+        let parent_modules = std::env::var_os("PSModulePath");
+        let script = r#"$ErrorActionPreference='Stop'; $utility=Get-Command ConvertFrom-Json; $security=Get-Command Get-Acl; [Console]::Out.Write((@{utilityReady=($null -ne $utility);securityReady=($null -ne $security)} | ConvertTo-Json -Compress))"#;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(
+            script
+                .encode_utf16()
+                .flat_map(u16::to_le_bytes)
+                .collect::<Vec<_>>(),
+        );
+        let mut command = std::process::Command::new("powershell.exe");
+        // Inject the incompatible inheritance into this test child only. The same
+        // production configuration must remove it and restore PS5 module discovery.
+        command.env("PSModulePath", "SYNTHETIC_INCOMPATIBLE_PS7_MODULE_PATH");
+        configure_windows_powershell(&mut command, &encoded);
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "native module discovery must succeed"
+        );
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({"utilityReady":true,"securityReady":true})
+        );
+        assert!(
+            std::env::var_os("PSModulePath") == parent_modules,
+            "parent environment must remain unchanged"
+        );
     }
 }
 

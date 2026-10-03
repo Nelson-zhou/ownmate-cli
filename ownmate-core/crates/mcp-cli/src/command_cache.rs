@@ -292,14 +292,7 @@ fn verify_windows_acl(path: &Path, sid: &str) -> Result<()> {
     let bytes = fs::read(&acl_file);
     let _ = fs::remove_file(&acl_file);
     let bytes = bytes?;
-    if bytes.len() > 16384 || bytes.len() % 2 != 0 {
-        return Err(invalid());
-    }
-    let words: Vec<u16> = bytes
-        .chunks_exact(2)
-        .map(|v| u16::from_le_bytes([v[0], v[1]]))
-        .collect();
-    let content = String::from_utf16(&words).map_err(|_| invalid())?;
+    let content = decode_windows_acl(&bytes)?;
     let sddl = content
         .lines()
         .find(|line| line.starts_with("D:"))
@@ -316,8 +309,35 @@ fn verify_windows_acl(path: &Path, sid: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(any(target_os = "windows", test))]
+fn decode_windows_acl(bytes: &[u8]) -> Result<String> {
+    if bytes.len() > 16384 || bytes.len() & 1 != 0 {
+        return Err(invalid());
+    }
+    let words: Vec<u16> = (0..bytes.len())
+        .step_by(2)
+        .map(|offset| u16::from_le_bytes([bytes[offset], bytes[offset + 1]]))
+        .collect();
+    String::from_utf16(&words).map_err(|_| invalid())
+}
+
 fn invalid() -> McpError {
     McpError::Invalid("私有密文请求缓存无效或权限不安全".into())
+}
+
+#[cfg(test)]
+mod windows_acl_decoding_tests {
+    use super::*;
+
+    #[test]
+    fn utf16_acl_preserves_lines_and_rejects_malformed_or_oversized_data() {
+        let content = "\u{feff}合成缓存\r\nD:PAI(A;OICI;FA;;;S-1-5-21-123)\r\n";
+        let bytes: Vec<u8> = content.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        assert_eq!(decode_windows_acl(&bytes).unwrap(), content);
+        assert!(decode_windows_acl(&[0]).is_err());
+        assert!(decode_windows_acl(&[0, 0xd8]).is_err());
+        assert!(decode_windows_acl(&vec![0; 16386]).is_err());
+    }
 }
 
 #[cfg(all(test, unix))]

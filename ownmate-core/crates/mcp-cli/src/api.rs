@@ -1,8 +1,8 @@
 use crate::protocol::{
-    ApiEnvelope, ClientReadyRequest, ClientReadyResponse, CreatePairingRequest,
-    CreatePairingResponse, ExchangePairingRequest, ExchangePairingResponse, JournalItemResponse,
-    JournalPage, OpaqueJournal, RefreshRequest, RefreshResponse, ReminderCommandEnvelope,
-    ReminderCommandReceipt,
+    ApiEnvelope, CancelPairingRequest, CancelPairingResponse, ClientReadyRequest,
+    ClientReadyResponse, CreatePairingRequest, CreatePairingResponse, ExchangePairingRequest,
+    ExchangePairingResponse, JournalItemResponse, JournalPage, OpaqueJournal, RefreshRequest,
+    RefreshResponse, ReminderCommandEnvelope, ReminderCommandReceipt,
 };
 use crate::storage::ExternalSession;
 use crate::{McpError, Result};
@@ -42,6 +42,13 @@ impl ReadResource {
 pub struct ExternalApiClient {
     base_url: String,
     agent: ureq::Agent,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum CancelOutcome {
+    Cancelled,
+    Expired,
+    AlreadyApproved,
 }
 
 impl ExternalApiClient {
@@ -108,7 +115,22 @@ impl ExternalApiClient {
         public_key: &str,
         supported_trust_modes: &[String],
     ) -> Result<CreatePairingResponse> {
-        self.post_public(
+        self.create_pairing_with_timeout(
+            client_name,
+            public_key,
+            supported_trust_modes,
+            Duration::from_secs(20),
+        )
+    }
+
+    pub fn create_pairing_with_timeout(
+        &self,
+        client_name: &str,
+        public_key: &str,
+        supported_trust_modes: &[String],
+        timeout: Duration,
+    ) -> Result<CreatePairingResponse> {
+        self.post_pairing(
             "/external-access/v1/pairings",
             &CreatePairingRequest {
                 client_name,
@@ -117,31 +139,61 @@ impl ExternalApiClient {
                 client_ready_version: 1,
                 supported_trust_modes,
             },
+            timeout,
         )
         .map_err(connection_error)
     }
 
     pub fn client_ready(&self, session: &mut ExternalSession, deadline: u64) -> Result<()> {
+        self.client_ready_with_timeout(session, deadline, Duration::from_secs(20))
+    }
+
+    pub fn client_ready_with_timeout(
+        &self,
+        session: &mut ExternalSession,
+        deadline: u64,
+        timeout: Duration,
+    ) -> Result<()> {
+        let start = std::time::Instant::now();
+        let remaining = || {
+            timeout
+                .checked_sub(start.elapsed())
+                .filter(|v| !v.is_zero())
+                .ok_or(McpError::PairTransport { retryable: true })
+        };
         let request = ClientReadyRequest {
             protocol_version: 1,
             client_ready_version: 1,
         };
         let first = self
-            .authorized_post(
+            .pairing_post(
                 "/external-access/v1/client/ready",
-                &session.access_token,
+                Some(&session.access_token),
                 &request,
+                remaining()?,
             )
             .map_err(connection_error)?;
         let result = if first.0 == 401 && session.is_trusted() {
             // A prior ready may have succeeded with its reply lost. Only an ACTIVE
             // grant can refresh server-side; awaiting/expired grants remain closed.
             // This also handles another process rotating the short access-token hash.
-            self.refresh(session).map_err(connection_error)?;
-            self.authorized_post(
+            let refresh_token = session
+                .refresh_token
+                .as_deref()
+                .ok_or_else(|| McpError::Invalid("可信待完成连接缺少刷新凭据".into()))?;
+            let refreshed = self
+                .post_pairing(
+                    "/external-access/v1/token/refresh",
+                    &RefreshRequest { refresh_token },
+                    remaining()?,
+                )
+                .map_err(connection_error)?;
+            apply_refreshed_session(session, refreshed)?;
+            self.pairing_post(
                 "/external-access/v1/client/ready",
-                &session.access_token,
+                Some(&session.access_token),
                 &request,
+                remaining()?,
             )
             .map_err(connection_error)?
         } else {
@@ -156,14 +208,106 @@ impl ExternalApiClient {
         pairing_id: &str,
         pairing_secret: &str,
     ) -> Result<ExchangePairingResponse> {
-        self.post_public(
+        self.exchange_pairing_with_timeout(pairing_id, pairing_secret, Duration::from_secs(20))
+    }
+
+    pub fn exchange_pairing_with_timeout(
+        &self,
+        pairing_id: &str,
+        pairing_secret: &str,
+        timeout: Duration,
+    ) -> Result<ExchangePairingResponse> {
+        self.post_pairing(
             "/external-access/v1/pairings/exchange",
             &ExchangePairingRequest {
                 pairing_id,
                 pairing_secret,
             },
+            timeout,
         )
         .map_err(connection_error)
+    }
+
+    pub fn cancel_pairing(
+        &self,
+        pairing_id: &str,
+        pairing_secret: &str,
+        timeout: Duration,
+    ) -> Result<CancelOutcome> {
+        let result: Result<CancelPairingResponse> = self.post_pairing(
+            &format!(
+                "/external-access/v1/pairings/{}/cancel",
+                percent_encode(pairing_id)
+            ),
+            &CancelPairingRequest { pairing_secret },
+            timeout,
+        );
+        match result {
+            Ok(value)
+                if value.protocol_version == 1
+                    && value.pairing_id == pairing_id
+                    && value.status == "cancelled" =>
+            {
+                Ok(CancelOutcome::Cancelled)
+            }
+            Ok(_) => Err(McpError::Invalid(
+                "取消配对响应不匹配；旧码失效未确认".into(),
+            )),
+            Err(McpError::ApiResponse {
+                status: 409, code, ..
+            }) if code == "EXTERNAL_PAIRING_ALREADY_APPROVED" => Ok(CancelOutcome::AlreadyApproved),
+            Err(McpError::ApiResponse {
+                status: 410, code, ..
+            }) if code == "EXTERNAL_PAIRING_EXPIRED" => Ok(CancelOutcome::Expired),
+            Err(error) => Err(connection_error(error)),
+        }
+    }
+
+    fn post_pairing<B: Serialize, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+        timeout: Duration,
+    ) -> Result<T> {
+        decode_response(self.pairing_post(path, None, body, timeout)?)
+    }
+
+    fn pairing_post<B: Serialize>(
+        &self,
+        path: &str,
+        token: Option<&str>,
+        body: &B,
+        timeout: Duration,
+    ) -> Result<(u16, String, Option<u64>)> {
+        let request = self
+            .agent
+            .post(format!("{}{}", self.base_url, path))
+            .config()
+            .timeout_global(Some(timeout))
+            .build()
+            .header("Accept", "application/json");
+        let request = if let Some(token) = token {
+            request.header("Authorization", format!("Bearer {token}"))
+        } else {
+            request
+        };
+        let mut response = request.send_json(body).map_err(pair_transport_error)?;
+        let status = response.status().as_u16();
+        if matches!(status, 502..=504) {
+            return Err(McpError::ApiResponse {
+                status,
+                code: "SERVER_UNAVAILABLE".into(),
+                message: "连接服务暂不可用".into(),
+            });
+        }
+        let retry_after = retry_after_header(&response);
+        let text = response
+            .body_mut()
+            .with_config()
+            .limit(MAX_RESPONSE_BYTES)
+            .read_to_string()
+            .map_err(pair_transport_error)?;
+        Ok((status, text, retry_after))
     }
 
     pub fn list_journals(&self, session: &mut ExternalSession) -> Result<Vec<OpaqueJournal>> {
@@ -283,29 +427,7 @@ impl ExternalApiClient {
             "/external-access/v1/token/refresh",
             &RefreshRequest { refresh_token },
         )?;
-        if refreshed.protocol_version != 1 {
-            return Err(McpError::Invalid("外部访问令牌协议版本不兼容".into()));
-        }
-        if let Some(scopes) = &refreshed.scopes {
-            crate::storage::validate_scopes(scopes)?;
-            let old: std::collections::HashSet<_> = session.scopes.iter().collect();
-            let new: std::collections::HashSet<_> = scopes.iter().collect();
-            if old != new {
-                return Err(McpError::Invalid("刷新令牌不得改变原授权范围".into()));
-            }
-        }
-        if let Some(context) = &refreshed.write_context {
-            if session.write_context.as_ref() != Some(context) {
-                return Err(McpError::Invalid("刷新令牌不得改变原写授权身份".into()));
-            }
-        } else if session.scopes.iter().any(|s| s == "reminders:write") {
-            return Err(McpError::Invalid("刷新响应缺少原写授权身份".into()));
-        }
-        session.access_token = refreshed.access_token;
-        session.access_expires_at = refreshed.access_expires_at;
-        // Refresh token is stable. Ephemeral access tokens stay in each process, avoiding
-        // Keychain prompts and concurrent CLI/MCP writers overwriting a verified grant.
-        Ok(())
+        apply_refreshed_session(session, refreshed)
     }
 
     fn post_public<B: Serialize, T: DeserializeOwned>(&self, path: &str, body: &B) -> Result<T> {
@@ -404,6 +526,53 @@ fn connection_error(error: McpError) -> McpError {
     }
 }
 
+fn apply_refreshed_session(
+    session: &mut ExternalSession,
+    refreshed: RefreshResponse,
+) -> Result<()> {
+    if refreshed.protocol_version != 1 {
+        return Err(McpError::Invalid("外部访问令牌协议版本不兼容".into()));
+    }
+    if let Some(scopes) = &refreshed.scopes {
+        crate::storage::validate_scopes(scopes)?;
+        let old: std::collections::HashSet<_> = session.scopes.iter().collect();
+        let new: std::collections::HashSet<_> = scopes.iter().collect();
+        if old != new {
+            return Err(McpError::Invalid("刷新令牌不得改变原授权范围".into()));
+        }
+    }
+    if let Some(context) = &refreshed.write_context {
+        if session.write_context.as_ref() != Some(context) {
+            return Err(McpError::Invalid("刷新令牌不得改变原写授权身份".into()));
+        }
+    } else if session.scopes.iter().any(|s| s == "reminders:write") {
+        return Err(McpError::Invalid("刷新响应缺少原写授权身份".into()));
+    }
+    session.access_token = refreshed.access_token;
+    session.access_expires_at = refreshed.access_expires_at;
+    // Refresh token remains stable; short-lived access tokens only update process memory.
+    Ok(())
+}
+
+fn pair_transport_error(error: ureq::Error) -> McpError {
+    let retryable = match error {
+        ureq::Error::Timeout(_) => true,
+        ureq::Error::Io(ref io) => matches!(
+            io.kind(),
+            std::io::ErrorKind::TimedOut
+                | std::io::ErrorKind::ConnectionReset
+                | std::io::ErrorKind::ConnectionAborted
+                | std::io::ErrorKind::BrokenPipe
+                | std::io::ErrorKind::UnexpectedEof
+                | std::io::ErrorKind::Interrupted
+                | std::io::ErrorKind::NotConnected
+        ),
+        // Certificate/TLS/protocol/DNS errors are deliberately not assumed transient.
+        _ => false,
+    };
+    McpError::PairTransport { retryable }
+}
+
 fn retry_after_header(response: &ureq::http::Response<ureq::Body>) -> Option<u64> {
     response
         .headers()
@@ -496,6 +665,32 @@ fn percent_encode(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pairing_transport_errors_are_typed_redacted_and_tls_is_never_retryable() {
+        for (error, retryable) in [
+            (ureq::Error::Tls("PRIVATE_SYNTHETIC_TLS"), false),
+            (
+                ureq::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionReset,
+                    "PRIVATE_SYNTHETIC_IO",
+                )),
+                true,
+            ),
+            (
+                ureq::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "PRIVATE_SYNTHETIC_TLS",
+                )),
+                false,
+            ),
+            (ureq::Error::HostNotFound, false),
+        ] {
+            let error = pair_transport_error(error);
+            assert!(matches!(error, McpError::PairTransport { retryable:r } if r == retryable));
+            assert!(!error.to_string().contains("PRIVATE_SYNTHETIC"));
+        }
+    }
 
     fn fake_ready_server(
         refresh_allowed: bool,

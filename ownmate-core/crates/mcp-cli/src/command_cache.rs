@@ -284,6 +284,11 @@ fn windows_sid() -> Result<String> {
 }
 
 #[cfg(target_os = "windows")]
+pub(crate) fn verify_private_windows_directory(path: &Path) -> Result<()> {
+    verify_windows_acl(path, &windows_sid()?)
+}
+
+#[cfg(target_os = "windows")]
 fn protect_windows_directory(path: &Path) -> Result<()> {
     use std::os::windows::fs::MetadataExt;
     let metadata = fs::symlink_metadata(path)?;

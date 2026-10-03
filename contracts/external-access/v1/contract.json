@@ -20,6 +20,22 @@
     "defaultChecked": [],
     "existingGrantsAutoExpanded": false
   },
+  "pairingCancellation": {
+    "cancel": "POST /external-access/v1/pairings/{pairingId}/cancel",
+    "authentication": "original pairingSecret; HMAC and constant-time comparison",
+    "bodyFields": ["pairingSecret"],
+    "successStatus": "cancelled",
+    "linearization": "one Pairing pending-to-cancelled CAS competes with approval",
+    "duplicateCancel": "same secret returns the original cancelled result until original TTL deletion",
+    "approvedWinner": "409 EXTERNAL_PAIRING_ALREADY_APPROVED; finish original handshake, never revoke Grant",
+    "unavailable": "410 EXTERNAL_PAIRING_EXPIRED",
+    "invalidProof": "403 EXTERNAL_PAIRING_SECRET_INVALID",
+    "replaceOrder": ["confirmCancellationOrExpiry", "createNewPairing", "showNewQr"],
+    "extendsOriginalExpiry": false,
+    "changesExistingGrants": false,
+    "matchByClientNameOrIp": false,
+    "pairingPrivateKeyOrSecretPersisted": false
+  },
   "clientReadiness": {
     "clientReadyVersion": 1,
     "negotiatedAtCreation": true,

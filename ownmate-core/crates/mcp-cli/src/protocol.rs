@@ -42,6 +42,20 @@ pub struct ExchangePairingRequest<'a> {
     pub pairing_secret: &'a str,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CancelPairingRequest<'a> {
+    pub pairing_secret: &'a str,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CancelPairingResponse {
+    pub protocol_version: u32,
+    pub pairing_id: String,
+    pub status: String,
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExchangePairingResponse {

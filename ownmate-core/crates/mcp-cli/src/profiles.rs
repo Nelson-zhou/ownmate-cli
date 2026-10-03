@@ -286,6 +286,55 @@ pub fn trusted_metadata_available() -> bool {
         .is_ok()
 }
 
+/// Non-mutating selector evidence only: never opens the native credential store or network.
+pub fn metadata_status() -> Result<serde_json::Value> {
+    let store = ProfileStore::system()?;
+    let profiles = match fs::symlink_metadata(&store.directory) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Profiles::default(),
+        Err(_) => return Err(profile_error()),
+        Ok(metadata) => {
+            if !metadata.is_dir() || metadata.file_type().is_symlink() {
+                return Err(profile_error());
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if metadata.permissions().mode() & 0o077 != 0 {
+                    return Err(profile_error());
+                }
+            }
+            #[cfg(target_os = "windows")]
+            crate::command_cache::verify_private_windows_directory(&store.directory)
+                .map_err(|_| profile_error())?;
+            store.read()?
+        }
+    };
+    let (state, reason, next) = if profiles.pending.is_some() {
+        (
+            "pending",
+            "LOCAL_CLIENT_READY_PENDING",
+            "run_mcp_to_resume_original_candidate",
+        )
+    } else if profiles.active.is_some() {
+        (
+            "configured",
+            "LOCAL_TRUSTED_SELECTOR_PRESENT",
+            "run_mcp_server_validation_still_required",
+        )
+    } else {
+        (
+            "unknown",
+            "NO_LOCAL_SELECTOR_LEGACY_NOT_INSPECTED",
+            "pair_or_use_existing_mcp_connection",
+        )
+    };
+    Ok(
+        serde_json::json!({"state":state,"reason":reason,"nextAction":next,
+        "evidence":"local_selector_only","serverActiveConfirmed":false,
+        "nativeCredentialChecked":false,"pending":profiles.pending.is_some(),"activeSelectorPresent":profiles.active.is_some()}),
+    )
+}
+
 pub fn stage_trusted(session: &ExternalSession, deadline: u64) -> Result<()> {
     ProfileStore::system()?.stage(&NativeCredentials, session, deadline)
 }

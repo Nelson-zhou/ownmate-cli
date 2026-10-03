@@ -2,6 +2,8 @@ pub mod api;
 pub mod command_cache;
 pub mod crypto;
 pub mod mcp;
+pub mod pair_owner;
+pub mod pair_retry;
 pub mod pairing;
 pub mod profiles;
 pub mod projection;
@@ -22,6 +24,13 @@ pub enum McpError {
     Invalid(String),
     #[error("网络请求失败: {0}")]
     Network(String),
+    #[error("连接请求未完成；未输出请求或凭据内容")]
+    PairTransport { retryable: bool },
+    #[error("{reason}; nextAction={next_action}")]
+    Action {
+        reason: &'static str,
+        next_action: &'static str,
+    },
     #[error("OwnMate API 拒绝请求: {0}")]
     Api(String),
     #[error("OwnMate API 拒绝请求（HTTP {status}, {code}）: {message}")]
